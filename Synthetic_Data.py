@@ -13,6 +13,7 @@ DB_CONFIG = {
 }
 
 def fetch_sample(limit=20000):
+<<<<<<< HEAD
     """
     Fetches the generated data from Postgres to be used as the 
     Observation Space for the RL Agent.
@@ -51,6 +52,13 @@ def fetch_sample(limit=20000):
     finally:
         conn.close()
         
+=======
+    conn = psycopg2.connect(**DB_CONFIG)
+    # We select specific columns to avoid issues with ID generation
+    query = f"SELECT age, occupation, income, region, qualification, cibil_score, overdue_months, bounce_count, current_demand, total_demand, risk_category, profile_type FROM customer_profiles LIMIT {limit}"
+    df = pd.read_sql(query, conn)
+    conn.close()
+>>>>>>> 8ae0e9c9762849f7ac87192bc41c8a729e3c0f2e
     return df
 
 def train_and_generate_modern(df, num_to_generate=200000):
@@ -63,7 +71,11 @@ def train_and_generate_modern(df, num_to_generate=200000):
     synthesizer = CTGANSynthesizer(
         metadata, 
         enforce_rounding=False,
+<<<<<<< HEAD
         epochs=300,           # Set to 100 for high quality
+=======
+        epochs=100,           # Set to 100 for high quality
+>>>>>>> 8ae0e9c9762849f7ac87192bc41c8a729e3c0f2e
         verbose=True,
         cuda=True             # THIS ENABLES YOUR GPU
     )
@@ -86,6 +98,7 @@ def save_to_postgres(df, table_name="synthetic_profiles_gan"):
     # Create the table based on the existing structure
     cur.execute(f"DROP TABLE IF EXISTS {table_name};")
     cur.execute(f"""
+<<<<<<< HEAD
          CREATE TABLE synthetic_profiles_gan(
             -- S1: Customer Profile Data (Socioeconomic Details)
             customer_id VARCHAR(20) PRIMARY KEY,
@@ -107,6 +120,13 @@ def save_to_postgres(df, table_name="synthetic_profiles_gan"):
             pending_status VARCHAR(10), -- 'Yes' or 'No'
             last_call_status VARCHAR(50),
             risk_category VARCHAR(20)
+=======
+        CREATE TABLE {table_name} (
+            customer_id VARCHAR(20), age INT, occupation VARCHAR(50), income DECIMAL(12,2),
+            region VARCHAR(10), qualification VARCHAR(50), cibil_score INT,
+            overdue_months INT, bounce_count INT, current_demand DECIMAL(12,2),
+            total_demand DECIMAL(12,2), risk_category VARCHAR(20), profile_type VARCHAR(10)
+>>>>>>> 8ae0e9c9762849f7ac87192bc41c8a729e3c0f2e
         );
     """)
     

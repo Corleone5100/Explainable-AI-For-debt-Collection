@@ -196,6 +196,7 @@ def generate_batch(batch_size, start_id):
     return batch_data
 
 def insert_data(total_records=20000, batch_size=1000):
+<<<<<<< HEAD
     """
     Inserts synthetic borrower data into Postgres.
     Matches the exact S1 and S2 parameters.
@@ -203,6 +204,9 @@ def insert_data(total_records=20000, batch_size=1000):
     # Database configuration (Ensure this is defined in your script)
     # DB_CONFIG = { ... } 
     
+=======
+    """Inserts data into Postgres using bulk execution."""
+>>>>>>> 8ae0e9c9762849f7ac87192bc41c8a729e3c0f2e
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     
@@ -243,4 +247,8 @@ def insert_data(total_records=20000, batch_size=1000):
 if __name__ == "__main__":
     create_database_if_not_exists()
     create_table()
+<<<<<<< HEAD
     insert_data()
+=======
+    insert_data(20000)
+>>>>>>> 8ae0e9c9762849f7ac87192bc41c8a729e3c0f2e
