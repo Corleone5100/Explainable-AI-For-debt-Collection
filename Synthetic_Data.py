@@ -13,11 +13,44 @@ DB_CONFIG = {
 }
 
 def fetch_sample(limit=20000):
+    """
+    Fetches the generated data from Postgres to be used as the 
+    Observation Space for the RL Agent.
+    """
     conn = psycopg2.connect(**DB_CONFIG)
-    # We select specific columns to avoid issues with ID generation
-    query = f"SELECT age, occupation, income, region, qualification, cibil_score, overdue_months, bounce_count, current_demand, total_demand, risk_category, profile_type FROM customer_profiles LIMIT {limit}"
-    df = pd.read_sql(query, conn)
-    conn.close()
+    
+    # Selecting all relevant S1 and S2 features
+    query = f"""
+        SELECT 
+            age, 
+            occupation, 
+            income, 
+            family_size, 
+            region, 
+            qualification, 
+            cibil_score, 
+            cibil_hit,
+            overdue_months, 
+            bounce_count, 
+            emi_month, 
+            current_demand, 
+            total_demand, 
+            pending_status, 
+            last_call_status, 
+            risk_category 
+        FROM customer_profiles 
+        LIMIT {limit}
+    """
+    
+    try:
+        # Load into DataFrame
+        df = pd.read_sql(query, conn)
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        df = pd.DataFrame() # Return empty DF on error
+    finally:
+        conn.close()
+        
     return df
 
 def train_and_generate_modern(df, num_to_generate=200000):
@@ -30,7 +63,7 @@ def train_and_generate_modern(df, num_to_generate=200000):
     synthesizer = CTGANSynthesizer(
         metadata, 
         enforce_rounding=False,
-        epochs=100,           # Set to 100 for high quality
+        epochs=300,           # Set to 100 for high quality
         verbose=True,
         cuda=True             # THIS ENABLES YOUR GPU
     )
@@ -53,11 +86,27 @@ def save_to_postgres(df, table_name="synthetic_profiles_gan"):
     # Create the table based on the existing structure
     cur.execute(f"DROP TABLE IF EXISTS {table_name};")
     cur.execute(f"""
-        CREATE TABLE {table_name} (
-            customer_id VARCHAR(20), age INT, occupation VARCHAR(50), income DECIMAL(12,2),
-            region VARCHAR(10), qualification VARCHAR(50), cibil_score INT,
-            overdue_months INT, bounce_count INT, current_demand DECIMAL(12,2),
-            total_demand DECIMAL(12,2), risk_category VARCHAR(20), profile_type VARCHAR(10)
+         CREATE TABLE synthetic_profiles_gan(
+            -- S1: Customer Profile Data (Socioeconomic Details)
+            customer_id VARCHAR(20) PRIMARY KEY,
+            age INT,
+            occupation VARCHAR(50),
+            income DECIMAL(12,2),
+            family_size INT,
+            region VARCHAR(10),
+            qualification VARCHAR(50),
+            cibil_score INT,
+            cibil_hit INT, -- 0 or 1
+
+            -- S2: Debt & History Data (Financial State)
+            overdue_months INT,
+            bounce_count INT,
+            emi_month INT,
+            current_demand DECIMAL(12,2),
+            total_demand DECIMAL(12,2),
+            pending_status VARCHAR(10), -- 'Yes' or 'No'
+            last_call_status VARCHAR(50),
+            risk_category VARCHAR(20)
         );
     """)
     
