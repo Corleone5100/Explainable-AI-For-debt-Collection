@@ -122,7 +122,7 @@ def generate_batch(batch_size, start_id):
         
     return batch_data
 
-def insert_data(total_records=200, batch_size=10000):
+def insert_data(total_records=20000, batch_size=1000):
     """Inserts data into Postgres using bulk execution."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
@@ -149,4 +149,4 @@ def insert_data(total_records=200, batch_size=10000):
 if __name__ == "__main__":
     create_database_if_not_exists()
     create_table()
-    insert_data(200)
+    insert_data(20000)
