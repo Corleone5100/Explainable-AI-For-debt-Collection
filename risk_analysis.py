@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 
 # Database Connection
 engine = create_engine('postgresql://postgres:Bishal5100#@localhost:5432/debt_market_db')
-df = pd.read_sql_table('customer_profiles', engine)
+df = pd.read_sql_table('synthetic_profiles_gan', engine)
 
 # Set visual style
 sns.set(style="whitegrid")
