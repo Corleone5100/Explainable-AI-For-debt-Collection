@@ -1,0 +1,724 @@
+================================================================================
+GRAPH CONSTRUCTION: CURRENT STATE vs PROPOSED ENHANCEMENTS
+Complete Report with RL Integration Details
+================================================================================
+
+TABLE OF CONTENTS:
+  Part A: What We Are Doing NOW (Current Implementation)
+  Part B: Every Proposed Change (Detailed Breakdown)
+  Part C: How Each Change Attaches to the RL Environment
+  Part D: Implementation Order & Dependencies
+  Part E: Expected Impact on Final Results
+
+================================================================================
+PART A: WHAT WE ARE DOING NOW
+================================================================================
+
+1. DATA LOADING
+   ─────────────
+   Source: PostgreSQL table `master_env_data`
+   Volume: 200,000 rows (LIMIT clause)
+   Columns used: age, income, cibil_score, overdue_months, bounce_count,
+                 coll_success_rate, occupation, region
+
+   Features extracted per node (8 total):
+     - age (raw numeric)
+     - income (raw numeric)
+     - cibil_score (raw numeric)
+     - overdue_months (raw numeric)
+     - bounce_count (raw numeric)
+     - coll_success_rate (raw numeric)
+     - occ_idx (occupation → category codes)
+     - reg_idx (region → category codes)
+
+   Preprocessing: StandardScaler() applied to all 8 features
+
+2. EDGE CREATION (Contagion Links)
+   ─────────────────────────────────
+   Rule: Two borrowers are connected if they share BOTH:
+         - Same region (e.g., "R1")
+         - Same occupation (e.g., "Salaried")
+
+   Method:
+     a. Group by (region, occupation)
+     b. Within each group, for every node i:
+        - Randomly sample up to 5 neighbors from the same group
+        - Create edge (i, neighbor)
+     c. Result: sparse graph, ~5 edges per node on average
+
+   Properties of current edges:
+     - UNWEIGHTED (all edges equal)
+     - UNDIRECTED (symmetric)
+     - NO edge features (just connectivity)
+     - DETERMINISTIC grouping but STOCHASTIC sampling
+
+   Example:
+     If 50 borrowers are Salaried in R1 → they form one group
+     Each gets connected to 5 random peers from those 50
+     A Salaried borrower in R2 gets NO connection to them
+
+3. GRAPH FEATURE EXTRACTION
+   ─────────────────────────
+   What we compute: "neighborhood_stress_signal"
+
+   Method: Single message-passing pass
+     - For each node, take the OVERDUE_MONTHS values of its neighbors
+     - Compute the MEAN of those values
+     - Store as neighborhood_stress_signal
+
+   Formula:
+     signal(i) = mean(overdue_months(j) for j in neighbors(i))
+
+   This uses torch_scatter.scatter_mean — a single aggregation,
+   NOT a trained GNN layer.
+
+4. OUTPUT
+   ───────
+   File: rl_ready_with_graph_features.csv
+   Columns: All original borrower columns + neighborhood_stress_signal
+   This CSV becomes the sole data source for the RL environment.
+
+5. WHAT THE RL ENVIRONMENT SEES
+   ─────────────────────────────
+   Observation (10 features):
+     [0] income
+     [1] cibil_score
+     [2] overdue_months
+     [3] bounce_count
+     [4] coll_success_rate
+     [5] neighborhood_stress_signal   ← THE ONLY graph-derived feature
+     [6] age
+     [7] occ_idx
+     [8] reg_idx
+     [9] 0.0 (padding)
+
+   The RL agent has NO direct access to the graph structure.
+   It only sees this ONE aggregated signal.
+
+================================================================================
+PART B: EVERY PROPOSED CHANGE (Detailed Breakdown)
+================================================================================
+
+CHANGE 1: Edge Weights Instead of Binary Edges
+────────────────────────────────────────────────
+CURRENT:
+  All edges are equal: (A,B) exists or doesn't.
+
+PROPOSED:
+  Assign a weight w(i,j) to every edge based on feature similarity:
+
+    w(i,j) = α * income_similarity + β * age_similarity + γ * same_risk
+
+  Where:
+    income_similarity = 1 - |income_i - income_j| / max_income_diff
+    age_similarity = 1 - |age_i - age_j| / max_age_diff
+    same_risk = 1 if risk_category matches, 0 otherwise
+    α, β, γ are tunable weights (e.g., 0.5, 0.3, 0.2)
+
+  Or learn weights via attention (see CHANGE 4).
+
+  Implementation in graph_builder.py:
+    - After creating edge_list, compute weight for each (i, j) pair
+    - Store as edge_attr tensor alongside edge_index
+    - PyG Data object becomes: Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+  Visualization impact: Thicker lines for stronger connections.
+
+────────────────────────────────────────────────
+
+CHANGE 2: Full GNN Layers (GCN / GAT / GraphSAGE)
+─────────────────────────────────────────────────
+CURRENT:
+  One hardcoded aggregation: scatter_mean of neighbor overdue_months.
+  No learnable parameters. No nonlinearity. No multi-hop reasoning.
+
+PROPOSED OPTION A — GCN (Graph Convolutional Network):
+  Apply learnable message passing:
+
+    H^(l+1) = σ(D̃^{-1/2} Ã D̃^{-1/2} H^(l) W^(l))
+
+  Where:
+    Ã = adjacency matrix with self-loops
+    D̃ = degree matrix of Ã
+    H^(l) = node features at layer l
+    W^(l) = learnable weight matrix
+
+  Architecture (example):
+    Layer 1: GCNConv(8 → 32) + ReLU + Dropout(0.2)
+    Layer 2: GCNConv(32 → 16) + ReLU
+    Output: 16-dimensional embedding per node
+
+  These 16 embeddings replace the single neighborhood_stress_signal.
+
+PROPOSED OPTION B — GAT (Graph Attention Network):
+  Learn WHICH neighbors matter:
+
+    α(i,j) = softmax(LeakyReLU(a^T [Wh_i || Wh_j]))
+
+  Each node learns to attend to its most relevant neighbors.
+  Output: weighted sum of neighbor features, where weights are learned.
+
+PROPOSED OPTION C — GraphSAGE:
+  Instead of using ALL neighbors, sample a fixed number per hop.
+  Better for large graphs and inductive settings (new unseen nodes).
+
+  Training approach:
+    a. Supervised: Predict risk_category (node classification)
+    b. Self-supervised: Node embedding similarity (contrastive loss)
+    c. Reconstruction: Predict neighbor overdue_months (current approach but learned)
+
+  Implementation:
+    - Use PyTorch Geometric's nn.GCNConv, nn.GATConv, or graphsage.SAGEConv
+    - Train for N epochs on the full graph
+    - Extract node embeddings after training
+    - Append embeddings to the CSV for RL
+
+────────────────────────────────────────────────
+
+CHANGE 3: Temporal / Behavioral Edges
+─────────────────────────────────────
+CURRENT:
+  Edges are purely demographic (region + occupation).
+
+PROPOSED:
+  Add SECOND type of edge based on behavior:
+
+    a. CO-DEFAULT edges: Connect borrowers who defaulted in the same month
+    b. COLLECTOR edges: Connect borrowers who share the same collector
+    c. SIMILAR_DEBT edges: Connect borrowers with similar overdue_months
+       and bounce_count (behavioral similarity, not demographic)
+
+  Multi-relational graph:
+    Instead of one edge_index, you'd have:
+      - edge_index_demographic (region + occupation)
+      - edge_index_temporal (co-default timing)
+      - edge_index_collector (shared collector)
+
+  PyTorch Geometric supports this via:
+    - Heterogeneous graphs (HeteroData)
+    - Multiple edge types in one Data object
+
+  How to implement:
+    For collector edges:
+      grouped = df.groupby('collector_id')
+      for name, group in grouped:
+          # connect all borrowers sharing this collector
+
+    For temporal edges (requires time-series data):
+      grouped = df.groupby(['default_year', 'default_month'])
+      for name, group in grouped:
+          # connect borrowers who defaulted in the same period
+
+────────────────────────────────────────────────
+
+CHANGE 4: Graph Validation & Quality Metrics
+─────────────────────────────────────────────
+CURRENT:
+  No validation that the graph structure is meaningful.
+
+PROPOSED:
+  Compute and report:
+
+    a. MODULARITY: Measures if nodes of same risk_category cluster together
+       High modularity → the graph captures meaningful communities
+       Q = (1/2m) * Σ[A_ij - (k_i * k_j / 2m)] * δ(c_i, c_j)
+
+    b. ASSORTATIVITY: Do similar nodes connect to similar nodes?
+       Risk assortativity: do high-risk borrowers connect to high-risk?
+       Degree assortativity: do well-connected borrowers connect to each other?
+
+    c. DEGREE DISTRIBUTION: Plot histogram — is it power-law? Gaussian?
+       Reveals if the graph is scale-free or random
+
+    d. CLUSTERING COEFFICIENT: For each node, what fraction of its
+       neighbors are also connected to each other?
+       High clustering → triangle-heavy graph → strong contagion potential
+
+    e. SHORTEST PATH ANALYSIS: Average hops between any two nodes
+       Indicates how fast "contagion" could spread across the graph
+
+    f. EDGE OVERLAP ANALYSIS: What % of edges connect same-risk borrowers?
+       If >60%, your demographic grouping aligns with risk patterns.
+
+  Implementation:
+    import networkx as nx
+    G = nx.Graph()
+    # ... build graph ...
+    modularity = community.modularity(partition, G)  # python-louvain
+    assortativity = nx.degree_pearson_correlation_coefficient(G)
+    clustering = nx.average_clustering(G)
+
+────────────────────────────────────────────────
+
+CHANGE 5: Multi-Hop Neighborhood Signals
+─────────────────────────────────────────
+CURRENT:
+  Only 1-hop neighbors: signal(i) = mean(neighbors_of_i)
+
+PROPOSED:
+  Compute signals at multiple distances:
+
+    signal_1hop(i) = mean(overdue_months of direct neighbors)
+    signal_2hop(i) = mean(overdue_months of neighbors-of-neighbors)
+    signal_3hop(i) = mean(overdue_months of 3-hop reachable nodes)
+
+  Why? A borrower might not have risky direct neighbors but might be
+  embedded in a risky 2-hop community (friend-of-friend effect).
+
+  Implementation:
+    from torch_sparse import SparseTensor
+    adj = SparseTensor(row=edge_index[0], col=edge_index[1])
+    adj_2hop = adj @ adj  # matrix multiplication = 2-hop connectivity
+
+    Then run scatter_mean on each hop's adjacency.
+
+  Output: Instead of 1 signal, you get 3:
+    neighborhood_stress_1hop, neighborhood_stress_2hop, neighborhood_stress_3hop
+
+────────────────────────────────────────────────
+
+CHANGE 6: Graph Pooling / Community Detection
+──────────────────────────────────────────────
+CURRENT:
+  No notion of graph-level structure or communities.
+
+PROPOSED:
+  Detect communities in the graph and assign each borrower a
+  community_risk_score:
+
+    a. Run Louvain / Leiden community detection
+    b. For each community, compute aggregate risk metrics:
+       - avg_overdue, pct_high_risk, total_demand_at_risk
+    c. Assign each borrower their community's aggregate metrics as features
+
+  This captures "my community is mostly high-risk" even if my
+  direct neighbors look okay.
+
+  Implementation:
+    import community
+    partition = community.best_partition(G)
+    df['community_id'] = partition.values()
+
+    community_risk = df.groupby('community_id')['risk_category'].apply(
+        lambda x: (x.isin(['High', 'Very High']).sum() / len(x))
+    )
+    df['community_risk_pct'] = df['community_id'].map(community_risk)
+
+  Output: New feature → community_risk_pct
+
+────────────────────────────────────────────────
+
+CHANGE 7: Node Degree as Feature
+─────────────────────────────────
+CURRENT:
+  Node degree is implicit but never explicitly used.
+
+PROPOSED:
+  Add explicit graph-structural features:
+
+    - degree: number of connections (popularity / exposure)
+    - clustering_coefficient: how interconnected are my neighbors?
+    - pagerank: importance in the graph
+    - betweenness_centrality: am I a bridge between communities?
+
+  Intuition: A highly-connected borrower in a high-risk cluster
+  is more concerning than an isolated borrower with same features.
+
+  Implementation:
+    G = nx.Graph()
+    # ... build graph ...
+    df['node_degree'] = [G.degree(n) for n in G.nodes()]
+    df['pagerank'] = nx.pagerank(G)
+    df['betweenness'] = nx.betweenness_centrality(G)
+
+  Output: 3 new features
+
+────────────────────────────────────────────────
+
+CHANGE 8: Dynamic / Incremental Graph Updates
+──────────────────────────────────────────────
+CURRENT:
+  Graph is built once from scratch. If data changes, full rebuild.
+
+PROPOSED:
+  For production, support incremental updates:
+    - New borrower arrives → compute its edges → insert into graph
+    - Borrower pays off debt → remove node or mark as resolved
+    - Use inductive GNN (GraphSAGE) so embeddings for new nodes
+      can be computed without retraining
+
+================================================================================
+PART C: HOW EACH CHANGE ATTACHES TO THE RL ENVIRONMENT
+================================================================================
+
+Currently, the connection between graph_builder.py and debt_env.py is:
+
+  graph_builder.py  →  rl_ready_with_graph_features.csv  →  DebtCollectionEnv
+
+The CSV is the ONLY interface. The RL env knows nothing about the graph.
+Here's how each change modifies this pipeline:
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 1 (Edge Weights) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: NONE by itself.
+
+Edge weights affect the GNN training (CHANGE 2), which then produces
+better embeddings. The RL env still receives a CSV — but the FEATURES
+in that CSV are now derived from a weighted GNN instead of a simple mean.
+
+What changes in the CSV:
+  CURRENT:  neighborhood_stress_signal (1 column)
+  AFTER:    gnn_embedding_dim_0, gnn_embedding_dim_1, ..., gnn_embedding_dim_15
+
+What changes in debt_env.py:
+  - Observation space dimension changes from 10 to (9 + embedding_size)
+  - Remove the 0.0 padding slot
+  - Update _get_obs() to read the GNN embedding columns instead of the
+    single neighborhood_stress_signal
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 2 (Full GNN) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+This is the BIGGEST change to what the RL env receives.
+
+CURRENT pipeline:
+  graph → scatter_mean → 1 signal → CSV → obs[5]
+
+PROPOSED pipeline:
+  graph → GCN/GAT (trained) → 16-dim embedding → CSV → obs[5:21]
+
+What changes in debt_env.py:
+
+  CURRENT:
+    self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(10,))
+
+  PROPOSED (with 16-dim GNN embedding):
+    self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(25,))
+    # 8 original features + 16 GNN dims + degree + pagerank + community_risk
+
+  CURRENT _get_obs():
+    obs = np.array([income, cibil, overdue, ..., neighborhood_stress, ...])
+
+  PROPOSED _get_obs():
+    obs = np.array([
+        income, cibil, overdue, bounce, coll_success,
+        age, occ_idx, reg_idx,                    # 8 original features
+        gnn_0, gnn_1, ..., gnn_15,                # 16 GNN embedding dims
+        node_degree, pagerank,                    # 2 structural features
+        community_risk_pct,                        # 1 community feature
+    ])
+
+  VecNormalize handles the scaling automatically since it normalizes
+  all observation dimensions.
+
+  Training impact:
+    - The PPO agent now receives much richer information about the
+      borrower's network context
+    - The GNN embeddings encode multi-hop contagion patterns that a
+      single scalar couldn't capture
+    - Expect the agent to learn more nuanced strategies (e.g., "this
+      borrower looks low-risk individually but their GNN embedding
+      reveals they're embedded in a high-risk cluster → use Field Visit")
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 3 (Temporal/Behavioral Edges) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: NONE directly (edges aren't in the CSV).
+
+But the GNN trained on a multi-relational graph produces richer
+embeddings, which flow into the CSV and then the RL env.
+
+If you use a Heterogeneous GNN (RGCN — Relational GCN):
+  - The GNN learns separate weight matrices for each edge type
+  - The resulting embeddings encode "I'm connected to risky people
+    via occupation" vs "I'm connected to risky people via my collector"
+  - The RL agent can then distinguish between demographic contagion
+    and behavioral contagion
+
+What changes:
+  - graph_builder.py becomes graph_builder_multi.py
+  - Instead of one edge_index, you have:
+    edge_index_demo, edge_index_collector, edge_index_temporal
+  - The GNN model becomes:
+    model = RGCNConv(in_channels=8, out_channels=32, num_relations=3)
+  - CSV and RL env changes are the same as CHANGE 2 (embedding columns)
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 4 (Graph Validation) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: NONE.
+
+This is a research/analysis tool. It answers:
+  "Is my graph structure actually meaningful, or am I connecting
+   random nodes?"
+
+If validation shows LOW modularity / assortativity:
+  → Your edge creation rule (region+occupation) doesn't align with risk
+  → Consider changing the edge rule before training the GNN
+  → This prevents feeding garbage graph structure to the RL agent
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 5 (Multi-Hop Signals) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: YES, directly adds features.
+
+What changes in the CSV:
+  CURRENT:  neighborhood_stress_signal (1 column)
+  PROPOSED: neighborhood_stress_1hop, neighborhood_stress_2hop, neighborhood_stress_3hop
+            (3 columns instead of 1)
+
+What changes in debt_env.py:
+  CURRENT:
+    row["neighborhood_stress_signal"],  # 1 value
+
+  PROPOSED:
+    row["neighborhood_stress_1hop"],
+    row["neighborhood_stress_2hop"],
+    row["neighborhood_stress_3hop"],    # 3 values
+
+  Observation space grows from 10 → 12.
+
+  Why it matters:
+    The RL agent can now learn:
+      - "My direct neighbors look fine, but 2 hops out it's bad →
+         take preventive action now before contagion reaches me"
+    This is forward-looking vs. the current reactive approach.
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 6 (Community Detection) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: YES, adds features.
+
+What changes in the CSV:
+  NEW columns: community_id, community_risk_pct, community_total_demand
+
+What changes in debt_env.py:
+  Add to _get_obs():
+    row["community_risk_pct"],
+
+  Observation space grows by 1-2 dimensions.
+
+  Why it matters:
+    The agent learns: "Even though THIS borrower looks manageable,
+    their entire community is defaulting → escalate action"
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 7 (Node Degree Features) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: YES, adds features.
+
+What changes in the CSV:
+  NEW columns: node_degree, pagerank, betweenness_centrality
+
+What changes in debt_env.py:
+  Add to _get_obs():
+    row["node_degree"],
+    row["pagerank"],
+
+  Observation space grows by 2-3 dimensions.
+
+  Why it matters:
+    The agent learns: "This borrower is highly connected — their behavior
+    influences many others. If we don't collect from them, their default
+    might spread. Prioritize them."
+
+  This introduces a new dimension: not just "can we collect from this
+  person?" but "does collecting from this person prevent further defaults?"
+
+──────────────────────────────────────────────────────────────────────────────
+CHANGE 8 (Dynamic Updates) → RL Impact:
+──────────────────────────────────────────────────────────────────────────────
+Direct RL impact: Changes the environment lifecycle.
+
+CURRENT:
+  Graph built once → CSV generated once → RL trains on static data
+
+PROPOSED:
+  Graph updates periodically → CSV regenerated → RL agent receives
+  fresh embeddings
+
+  For production:
+    - Deploy the GNN as a separate service
+    - When new borrower data arrives, compute embedding on-the-fly
+    - Pass embedding + features to RL agent in real-time
+    - This requires the GNN to be inductive (GraphSAGE), not transductive
+
+================================================================================
+PART D: IMPLEMENTATION ORDER & DEPENDENCIES
+================================================================================
+
+PHASE 1 — Foundation (do these first):
+──────────────────────────────────────
+  1. Edge Weights (CHANGE 1)
+     Prerequisites: None
+     Effort: Low (1-2 hours)
+     Blocks: CHANGE 2 (GAT needs weights for attention)
+
+  2. Graph Validation (CHANGE 4)
+     Prerequisites: Current graph exists
+     Effort: Low (1-2 hours)
+     Blocks: Nothing, but informs whether to change edge rules
+
+  3. Node Degree Features (CHANGE 7)
+     Prerequisites: None
+     Effort: Very Low (30 min)
+     Blocks: Nothing, easy win
+
+PHASE 2 — GNN Core (the main upgrade):
+──────────────────────────────────────
+  4. Full GNN Layers (CHANGE 2)
+     Prerequisites: CHANGE 1 (edge weights), CHANGE 4 (validation)
+     Effort: High (1-2 days)
+     Blocks: All downstream changes
+     Details:
+       a. Build GNN model (GCNConv or GATConv)
+       b. Train on node classification (predict risk_category)
+       c. Extract embeddings for all nodes
+       d. Save embeddings to CSV
+       e. Update RL env observation space
+
+  5. Multi-Hop Signals (CHANGE 5)
+     Prerequisites: None (can run parallel to GNN)
+     Effort: Medium (3-4 hours)
+     Blocks: Nothing
+     Alternative to GNN if you want to skip training
+
+PHASE 3 — Advanced Graph Features:
+────────────────────────────────────
+  6. Community Detection (CHANGE 6)
+     Prerequisites: CHANGE 4 (validation confirms communities exist)
+     Effort: Low (1-2 hours)
+     Blocks: Nothing
+
+  7. Multi-Relational Edges (CHANGE 3)
+     Prerequisites: CHANGE 2 (GNN), collector/temporal data available
+     Effort: High (2-3 days)
+     Blocks: CHANGE 8
+
+PHASE 4 — Production:
+─────────────────────
+  8. Dynamic Updates (CHANGE 8)
+     Prerequisites: CHANGE 2 (inductive GNN like GraphSAGE),
+                    CHANGE 3 (multi-relational)
+     Effort: High (3-5 days)
+     Blocks: Nothing
+
+RECOMMENDED MINIMUM PATH (for strongest results with least effort):
+  Phase 1 → CHANGE 2 (GNN) → CHANGE 6 (Community) → CHANGE 7 (Degree)
+
+  This gives you:
+    - Weighted edges
+    - Validated graph structure
+    - Trained GNN embeddings (16-dim)
+    - Community risk percentages
+    - Node degree + pagerank features
+    - Updated RL env with ~25-dim observation space
+
+================================================================================
+PART E: EXPECTED IMPACT ON FINAL RESULTS
+================================================================================
+
+METRIC 1: RL Agent Performance (Total Recovery)
+────────────────────────────────────────────────
+  Current:  PPO with 1 scalar graph signal
+  Expected: 5-15% improvement with full GNN embeddings
+  Reason:   The agent can now distinguish between "low-risk borrower in a
+            high-risk cluster" vs "truly isolated low-risk borrower"
+
+METRIC 2: Collection Strategy Nuance
+─────────────────────────────────────
+  Current:  Agent learns rough rules (High risk → Legal, Low risk → SMS)
+  Expected: Agent learns subtle strategies:
+            - "Field visit for well-connected borrowers before they spread risk"
+            - "Legal notice for borrowers whose GNN embedding shows hidden risk"
+            - "No action for borrowers in healthy communities even if individual
+               features look concerning"
+
+METRIC 3: Explainability
+─────────────────────────
+  Current:  Can only say "neighborhood stress influenced this decision"
+  Expected: Can say "this borrower's GCN embedding (which encodes their
+            position in a high-risk occupational cluster) combined with
+            their high betweenness centrality triggered the Field Visit"
+
+METRIC 4: Generalization
+─────────────────────────
+  Current:  Agent trained on one static graph snapshot
+  Expected: With inductive GNN (GraphSAGE), the system can generate
+            embeddings for NEW borrowers never seen during training
+            → deployable in production
+
+METRIC 5: Research Validity
+────────────────────────────
+  Current:  "We added a graph signal" — reviewers ask "why this signal?"
+  Expected: "We validated graph modularity (Q=0.45), trained a 2-layer GCN
+            achieving 87% node classification accuracy, and showed via
+            ablation that GNN features improve recovery by 12%"
+
+ABALATION STUDY DESIGN (to prove each component helps):
+────────────────────────────────────────────────────────
+  Run 1: No graph features at all (baseline)
+  Run 2: Current single neighborhood_stress_signal
+  Run 3: + Node degree features
+  Run 4: + GNN embeddings (replace single signal)
+  Run 5: + Community features
+  Run 6: All features combined (full system)
+
+  Compare total recovery, cost efficiency, and collection success rate
+  across all 6 runs.
+
+================================================================================
+SUMMARY: THE FULL PIPELINE AFTER ALL CHANGES
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  graph_builder.py                                              │
+  │  ─────────────────                                             │
+  │  1. Load borrower data from PostgreSQL                         │
+  │  2. Build MULTI-RELATIONAL graph:                              │
+  │     - Demographic edges (region + occupation) with weights      │
+  │     - Collector edges (shared collector)                        │
+  │     - Temporal edges (co-default timing)                        │
+  │  3. Validate graph:                                            │
+  │     - Modularity, assortativity, clustering coefficient         │
+  │  4. Train 2-layer GNN (GCN/GAT) to predict risk_category       │
+  │  5. Extract per-node:                                          │
+  │     - 16-dim GNN embedding                                     │
+  │     - 1-hop, 2-hop, 3-hop neighborhood stress signals          │
+  │     - Node degree, pagerank, betweenness                       │
+  │     - Community risk percentage                                │
+  │  6. Save to rl_ready_with_graph_features.csv                   │
+  └──────────────────────┬──────────────────────────────────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  rl_ready_with_graph_features.csv                              │
+  │  ─────────────────────────────────────────                     │
+  │  Original borrower columns: ~20                                │
+  │  + GNN embedding dimensions: 16                                │
+  │  + Multi-hop stress signals: 3                                 │
+  │  + Structural features: 3 (degree, pagerank, betweenness)      │
+  │  + Community features: 1-2                                     │
+  │  ─────────────────────────────────────────                     │
+  │  Total: ~45 columns                                            │
+  └──────────────────────┬──────────────────────────────────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  DebtCollectionEnv (debt_env.py)                               │
+  │  ───────────────────────────────────────                       │
+  │  Observation space: ~45 dimensions (was 10)                    │
+  │  Action space: 4 (unchanged)                                   │
+  │  Reward function: Enhanced with:                               │
+  │    - Contagion prevention bonus (collecting from central nodes  │
+  │      prevents spread → bonus reward)                           │
+  │    - Community impact bonus (reducing community_risk_pct →     │
+  │      bonus reward)                                             │
+  │  Algorithm: PPO (unchanged, but richer observations)           │
+  │  Expected: Better policies, more nuanced strategies            │
+  └─────────────────────────────────────────────────────────────────┘
+
+================================================================================
+END OF REPORT
+================================================================================

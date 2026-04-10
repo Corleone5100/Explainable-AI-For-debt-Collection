@@ -1,0 +1,290 @@
+================================================================================
+LEARNING CURVES ANALYSIS REPORT
+Multi-Seed Training Performance — PPO Agent with Graph-Enhanced Features
+================================================================================
+
+Training Configuration:
+  Seeds: 42, 43, 44
+  Timesteps per seed: 100,000
+  Episodes per seed: 1,003 each (3,009 total)
+  Smoothing: Rolling average (window=20)
+
+================================================================================
+1. OVERALL LEARNING TRAJECTORY
+================================================================================
+
+  ┌──────┬─────────┬─────────┬─────────┬─────────┬──────────┐
+  │ Seed │ Q1 Avg  │ Q2 Avg  │ Q3 Avg  │ Q4 Avg  │ Final 50 │
+  ├──────┼─────────┼─────────┼─────────┼─────────┼──────────┤
+  │ 42   │ -62,465 │ 234,825 │ 244,354 │ 254,954 │ 271,147  │
+  │ 43   │ -12,380 │ 224,399 │ 241,539 │ 243,176 │ 228,752  │
+  │ 44   │ -11,430 │ 239,071 │ 257,781 │ 280,340 │ 275,753  │
+  └──────┴─────────┴─────────┴─────────┴─────────┴──────────┘
+
+KEY OBSERVATION: ALL THREE SEEDS SHOW THE SAME PATTERN:
+  - Q1 (first 250 episodes): Negative to near-zero reward
+  - Q2 (episodes 250-500): Sharp jump to Rs. 230K+ 
+  - Q3-Q4 (episodes 500-1003): Gradual plateau around Rs. 250K
+
+  This is a textbook learning curve: initial exploration phase, rapid
+  improvement, then convergence to a stable policy.
+
+================================================================================
+2. SMOOTHED REWARD TRENDS
+================================================================================
+
+  ┌──────┬───────────┬──────────┬──────────┬───────────┐
+  │ Seed │ Start     │ Midpoint │ End      │ Growth    │
+  ├──────┼───────────┼──────────┼──────────┼───────────┤
+  │ 42   │ -751,259  │ 303,350  │ 273,172  │ +271.7%   │
+  │ 43   │ -846,121  │ 269,528  │ 217,244  │ +183.9%   │
+  │ 44   │ -689,527  │ 259,288  │ 273,280  │ +177.6%   │
+  └──────┴───────────┴──────────┴──────────┴───────────┘
+
+FIRST HALF vs SECOND HALF COMPARISON:
+  ┌──────┬────────────┬─────────────┬──────────┐
+  │ Seed │ First Half │ Second Half │ Change   │
+  ├──────┼────────────┼─────────────┼──────────┤
+  │ 42   │ Rs. 66,965 │ Rs. 248,897 │ +271.7%  │
+  │ 43   │ Rs. 85,640 │ Rs. 243,118 │ +183.9%  │
+  │ 44   │ Rs. 96,633 │ Rs. 268,263 │ +177.6%  │
+  └──────┴────────────┴─────────────┴──────────┘
+
+INTERPRETATION:
+  The agent starts in a deeply negative reward regime (Rs. -751K to -846K
+  smoothed), indicating catastrophic early decisions. Within 500 episodes
+  (~50,000 timesteps), it crosses into positive territory and plateaus.
+
+  The critical learning transition occurs at approximately episodes 50-100
+  (5,000-10,000 timesteps), after which the reward rapidly climbs from
+  negative to positive.
+
+  All three seeds converge to a similar final plateau (Rs. 217K-273K),
+  suggesting the policy landscape has a consistent attractor.
+
+================================================================================
+3. POSITIVE vs NEGATIVE EPISODES
+================================================================================
+
+  ┌──────┬───────────┬───────────┬──────────┬──────────────┐
+  │ Seed │ Positive  │ Negative  │ Total     │ Positive %   │
+  ├──────┼───────────┼───────────┼──────────┼──────────────┤
+  │ 42   │ 889       │ 114       │ 1,003     │ 88.6%        │
+  │ 43   │ 900       │ 103       │ 1,003     │ 89.7%        │
+  │ 44   │ 906       │ 97        │ 1,003     │ 90.3%        │
+  └──────┴───────────┴───────────┴──────────┴──────────────┘
+
+  Average across seeds: 89.5% positive episodes
+
+  Reward Range:
+    Seed 42: Max = +Rs. 644,735 | Min = -Rs. 935,967
+    Seed 43: Max = +Rs. 851,966 | Min = -Rs. 1,112,146
+    Seed 44: Max = +Rs. 808,013 | Min = -Rs. 1,206,454
+
+  Average best episode:  +Rs. 768,238
+  Average worst episode: -Rs. 1,084,856
+  Best/Worst ratio: 1:1.41 (losses are 41% larger than best gains)
+
+INTERPRETATION:
+  The agent achieves positive rewards in ~90% of episodes, which is good.
+  However, the 10% negative episodes are significantly larger in magnitude
+  than the positive ones. This suggests that when the agent fails, it fails
+  catastrophically — likely by applying Legal Notice to Low/Very Low risk
+  borrowers (as confirmed by the evaluation report).
+
+  The reward range is enormous (spanning Rs. 2.3M from worst to best),
+  indicating high variance in episode outcomes depending on which borrowers
+  the agent encounters.
+
+================================================================================
+4. CROSS-SEED CONSISTENCY
+================================================================================
+
+  Metric                  Seed 42    Seed 43    Seed 44    Std Dev
+  ──────────────────────  ─────────  ─────────  ─────────  ─────────
+  Final 50-episode avg    271,147    228,752    275,753    ±26,879
+  Max episode reward      644,735    851,966    808,013    ±111,318
+  Min episode reward      -935,967   -1,112,146 -1,206,454 ±137,455
+  Positive episode %      88.6%      89.7%      90.3%      ±0.86%
+  Smoothed endpoint       273,172    217,244    273,280    ±32,303
+  Learning rate (% growth) 271.7%    183.9%     177.6%     ±53.2%
+
+  Mean final avg reward:  Rs. 258,551 (std: ±26,879, CV: 10.4%)
+
+INTERPRETATION:
+  The three seeds are remarkably consistent:
+    - 89-90% positive episodes across all seeds
+    - Final plateau within 10.4% coefficient of variation
+    - All seeds follow the same Q1-negative → Q2-positive transition
+
+  However, Seed 42 learns 2.7x faster (271.7% growth) than Seed 43 (183.9%),
+  suggesting the agent's initial policy sensitivity to random initialization.
+  This is typical for PPO but indicates that more training timesteps would
+  reduce seed-dependent variance.
+
+  The final reward range (228K-276K) has a standard deviation of Rs. 27K,
+  which means a single-seed evaluation could over/underestimate true
+  performance by ~10%.
+
+================================================================================
+5. LEARNING PHASE ANALYSIS
+================================================================================
+
+PHASE 1: EXPLORATION (Episodes 1-50, ~5,000 timesteps)
+  Smoothed reward: Rs. -751K to -846K
+  Behavior: Agent tries random actions, applies Legal Notice too aggressively
+  on Low risk borrowers, incurs massive penalties
+  Key issue: Policy has not yet learned to differentiate risk categories
+
+PHASE 2: TRANSITION (Episodes 50-200, ~5,000-20,000 timesteps)
+  Smoothed reward: Crosses from negative to positive (~episode 100-150)
+  Behavior: Agent learns the basic risk-action mapping (High->Legal, Low->SMS)
+  The gradient from the reward function starts overriding initial randomness
+
+PHASE 3: RAPID IMPROVEMENT (Episodes 200-500, ~20,000-50,000 timesteps)
+  Smoothed reward: Jumps from Rs. 0 to Rs. 230K+
+  Behavior: Agent refines its policy, learns to handle Very High risk
+  borrowers effectively. The GAT embeddings start contributing meaningfully
+  to decision quality
+
+PHASE 4: PLATEAU (Episodes 500-1003, ~50,000-100,000 timesteps)
+  Smoothed reward: Gradual climb from Rs. 230K to Rs. 260K
+  Behavior: Policy has largely converged. The agent is fine-tuning its
+  handling of Medium risk borrowers (the hardest category). Growth slows
+  significantly — diminishing returns from additional training
+
+================================================================================
+6. COMPARISON WITH EVALUATION RESULTS
+================================================================================
+
+  Training (learning curves)       vs    Evaluation (50 episodes)
+  ────────────────────────────     ───   ────────────────────────
+  Avg episode reward: Rs. 258K           Avg decision reward: Rs. 2,513
+  (per 100-borrower episode)             (per individual borrower)
+  
+  Per-borrower equivalent: Rs. 2,580     Per-borrower actual: Rs. 2,513
+  
+  DIFFERENCE: 2.7% (training slightly overestimates)
+
+INTERPRETATION:
+  The training reward (Rs. 2,580 per borrower) closely matches the
+  evaluation reward (Rs. 2,513 per borrower). The 2.7% gap suggests
+  minimal overfitting — the agent generalizes well from training to
+  evaluation.
+
+  This is a strong signal that the policy has learned genuine patterns
+  rather than memorizing borrower profiles.
+
+================================================================================
+7. WHAT NEEDS IMPROVEMENT
+================================================================================
+
+ISSUE 1: SLOW INITIAL LEARNING (Episodes 1-50)
+  Problem: First 50 episodes average Rs. -751K to -846K smoothed reward
+  Impact: Wasted training compute; the agent takes 5,000+ timesteps just
+  to escape the negative regime
+  Root cause: The reward function's penalties are so large (Legal on Low
+  risk = Rs. 800 + 35% of total_demand penalty) that the agent needs
+  many episodes to discover the correct action mapping
+  Fix: Pre-train with behavioral cloning from the rule-based policy for
+  5,000-10,000 timesteps, then switch to PPO. This gives the agent a
+  reasonable starting point instead of random exploration.
+  Expected: Reduce Q1 negative from -62K to +50K, save ~20,000 timesteps
+
+ISSUE 2: HIGH EPISODE-TO-EPISODE VARIANCE
+  Problem: Raw reward standard deviation is ~Rs. 200K+, range spans Rs. 2M
+  Impact: Noisy gradient updates, slow convergence
+  Root cause: The agent's reward depends heavily on which borrowers it
+  encounters in each episode. An episode with 30 Very High risk borrowers
+  yields Rs. 800K+; one with 30 Low risk yields -Rs. 1.1M
+  Fix: Increase VecNormalize's clip_obs and clip_reward parameters.
+  Currently clip_obs=10.0. Also consider reward clipping in PPO
+  (clip_range parameter)
+  Expected: Smoother learning curves, faster convergence
+
+ISSUE 3: PLATEAU AT SUBOPTIMAL LEVEL
+  Problem: All seeds plateau around Rs. 250K-270K, well below the theoretical
+  maximum. The rule-based policy achieves Rs. 3,671 per decision vs PPO's
+  Rs. 2,513.
+  Impact: The PPO agent is 46% less efficient than a simple heuristic
+  Root cause: The over-escalation problem on Low/Medium risk borrowers
+  (detailed in evaluation_report.txt). The agent hasn't learned to restrain
+  itself on easy borrowers
+  Fix: The same fix as in the evaluation report — increase penalties for
+  Legal on Low risk from 0.35x to 0.6x of total_demand
+  Expected: +Rs. 1.5M improvement, bringing PPO to Rs. 3,000+/decision
+
+ISSUE 4: SEED SENSITIVITY IN LEARNING SPEED
+  Problem: Seed 42 grows 271.7% while Seed 43 grows only 183.9% — a 48%
+  difference in learning rate
+  Impact: Single-seed evaluations may not be representative
+  Fix: Use a higher learning rate warmup period, or increase n_steps from
+  512 to 2048 in PPO to reduce policy update variance
+  Expected: More consistent learning across seeds (CV < 5%)
+
+ISSUE 5: INSUFFICIENT TRAINING TIMESTEPS FOR FULL FEATURE SET
+  Problem: The ablation study shows the full 150-feature model fails at
+  100K timesteps (-Rs. 15.4M), but even the optimal 16-feature model
+  hasn't fully converged (still climbing at episode 1003)
+  Impact: The agent may be 10-15% below its true potential
+  Fix: Increase training to 200K-500K timesteps for the full feature model
+  Expected: An additional 10-20% improvement in final reward
+
+ISSUE 6: NO LEARNING CURVE FOR EVALUATION MODEL
+  Problem: The production model (graph_rl_debt_model.zip) was trained for
+  500K timesteps, but we only have learning curves for 100K timesteps
+  (ablation runs). We don't know if the 500K model continued improving
+  or plateaued
+  Fix: Run learning_curves.py with RL_TOTAL_TIMESTEPS=500000
+  Expected: Confirm whether 500K timesteps is sufficient or if more is needed
+
+================================================================================
+8. RECOMMENDATIONS (PRIORITIZED)
+================================================================================
+
+  PRIORITY 1: Behavioral Cloning Warmup (HIGH IMPACT, LOW EFFORT)
+    Pre-train with rule-based actions for 10K timesteps before PPO
+    Expected: Eliminate the negative Q1 entirely, reduce training time by 20%
+
+  PRIORITY 2: Increase Legal-on-Low Penalty (HIGH IMPACT, MEDIUM EFFORT)
+    Change debt_env.py penalty from 0.35 to 0.6 for Legal on Low risk
+    Retrain and re-evaluate
+    Expected: +Rs. 1.5M improvement, PPO surpasses rule-based efficiency
+
+  PRIORITY 3: Increase Training to 200K+ for Full Model (MEDIUM IMPACT)
+    The learning curves are still climbing at 100K timesteps
+    Expected: Additional 10-20% improvement, better convergence
+
+  PRIORITY 4: Reward Clipping and Normalization (MEDIUM IMPACT)
+    Clip rewards to [-1000, +1000] range to reduce gradient variance
+    Expected: Smoother learning, fewer catastrophic episodes
+
+  PRIORITY 5: Multi-Seed Production Evaluation (LOW IMPACT, VALIDATION)
+    Train the final model with 5 seeds instead of 1, select the best
+    Expected: More robust production model, reduced variance
+
+================================================================================
+9. CONCLUSION
+================================================================================
+
+The learning curves demonstrate a healthy training process:
+  - Clear learning signal (not random noise)
+  - Consistent convergence across 3 seeds (CV = 10.4%)
+  - Minimal train-eval gap (2.7% = good generalization)
+  - 89.5% positive episodes
+
+However, the agent plateaus at a suboptimal level — 46% below the rule-based
+baseline in per-decision efficiency. The root cause is consistent across
+evaluation and learning curves: over-escalation on Low/Medium risk borrowers.
+
+The learning curves also reveal that 100K timesteps is insufficient for full
+convergence. The agent is still improving at episode 1003, suggesting that
+200K-500K timesteps would yield meaningful gains.
+
+Most critically, the first 50 episodes are wasted on catastrophic exploration.
+A behavioral cloning warmup from the rule-based policy would eliminate this
+waste and accelerate training significantly.
+
+================================================================================
+END OF REPORT
+================================================================================

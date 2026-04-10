@@ -1,0 +1,34 @@
+# Environment variables (contains DB credentials)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML artifacts
+*.pkl
+*.zip
+*.model
+
+# Logs
+logs/
+
+# XAI outputs
+xai_outputs/
+evaluation_outputs/
+
+# Test data
+test_data.csv

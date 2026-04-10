@@ -1,0 +1,342 @@
+================================================================================
+EVALUATION REPORT
+Explainable AI for Debt Collection — Comprehensive Performance Analysis
+================================================================================
+
+Generated from: evaluation_outputs/
+Model: graph_rl_debt_model.zip (GAT + PPO with graph-enhanced features)
+Evaluation: 50 episodes, 5,000 total decisions
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+The Graph + GAT-enhanced PPO agent demonstrates strong performance on high-risk
+borrowers but shows significant weaknesses on low/very-low risk profiles.
+
+KEY RESULTS:
+  - Net Reward:              Rs. 12,565,967 (over 50 episodes)
+  - ROI:                     32.25x (every Rs.1 spent yields Rs.32.25 back)
+  - Recovery Rate:           22.0% of decisions resulted in successful recovery
+  - Avg Reward/Decision:     Rs. 2,513
+  - Decision Confidence:     91.95% (high certainty)
+  - Policy Correctness:      89.28% (picks top-2 optimal action)
+
+CRITICAL FINDING:
+  The agent excels at High (95.9% correctness) and Very High (99.8%) risk
+  borrowers but struggles with Low (54.9%) and Medium (58.4%) risk profiles.
+  It systematically over-escalates actions on Low/Very Low risk borrowers,
+  causing net losses on these groups.
+
+================================================================================
+1. OVERALL PERFORMANCE METRICS
+================================================================================
+
+  Metric                         Value
+  ────────────────────────────── ──────────────
+  Total Decisions                5,000
+  Successful Recoveries          1,100 (22.0%)
+  Total Recovered                Rs. 16,624,348
+  Estimated Total Cost           Rs. 500,000
+  Net Reward                     Rs. 12,565,967
+  ROI                            32.25x
+  Cost per Recovery              Rs. 454
+  Avg Reward per Decision        Rs. 2,513
+
+  Confidence Stats:
+    Average Confidence           91.95%
+    Average Entropy              0.194 (low = certain)
+    Uncertain Decisions          0.1% (only 5 out of 5,000)
+
+INTERPRETATION:
+  The agent is extremely confident in its decisions (92% avg confidence,
+  entropy of 0.19 vs max of 1.39). This is good — it means the policy has
+  converged to clear decision boundaries. However, high confidence doesn't
+  always mean correct decisions, as shown by the Low/Medium risk performance
+  below.
+
+================================================================================
+2. ACTION DISTRIBUTION
+================================================================================
+
+  Action            Count    Percentage
+  ───────────────── ──────── ──────────
+  No Action         393      7.9%
+  SMS/Call          745      14.9%
+  Field Visit       1,635    32.7%
+  Legal Notice      2,227    44.5%
+
+INTERPRETATION:
+  The agent is heavily skewed toward aggressive actions:
+  - 77.2% of all decisions are Field Visit or Legal Notice
+  - Only 22.8% are No Action or SMS/Call
+
+  This is partially justified given that High + Very High risk borrowers
+  make up 67.5% of the portfolio (3,373 out of 5,000 decisions). However,
+  the agent also over-escalates on Low risk borrowers (see Section 3).
+
+================================================================================
+3. PERFORMANCE BY RISK CATEGORY (CRITICAL ANALYSIS)
+================================================================================
+
+  ┌───────────┬──────────┬─────────────┬──────────┬──────────┬──────────┐
+  │ Risk      │ Decisions│ Net Reward  │ Avg Rew. │ Resolved │ Correct  │
+  ├───────────┼──────────┼─────────────┼──────────┼──────────┼──────────┤
+  │ Very High │ 1,704    │ Rs. 9.996M  │ Rs.5,863 │ 26.7%    │ 99.8%    │
+  │ High      │ 1,669    │ Rs. 3.651M  │ Rs.2,186 │ 26.5%    │ 95.9%    │
+  │ Medium    │ 675      │ Rs. 515K    │ Rs. 763  │ 17.2%    │ 58.4%    │
+  │ Very Low  │ 613      │ -Rs. 297K   │ -Rs.484  │ 8.8%     │ 94.9%    │
+  │ Low       │ 339      │ -Rs. 1.299M │ -Rs.3,821│ 9.7%     │ 54.9%    │
+  └───────────┴──────────┴─────────────┴──────────┴──────────┴──────────┘
+
+DETAILED ANALYSIS:
+
+  A) VERY HIGH RISK (Excellent Performance)
+     - Net Reward: Rs. 9,995,851 (79.5% of total reward)
+     - Action Profile: 61% Legal Notice, 39% Field Visit
+     - Correctness: 99.8% (near-perfect)
+     - Interpretation: The agent correctly identifies Very High risk borrowers
+       and applies aggressive actions. Legal Notice dominates (61%), which is
+       appropriate given these borrowers have 6-12 overdue months and 5-10
+       bounces. The 26.7% recovery rate is reasonable for this difficult group.
+
+  B) HIGH RISK (Excellent Performance)
+     - Net Reward: Rs. 3,650,684 (29.0% of total reward)
+     - Action Profile: 53% Legal Notice, 43% Field Visit
+     - Correctness: 95.9%
+     - Interpretation: Again, the agent correctly escalates to Field Visit
+       and Legal for High risk borrowers. The balance between Field Visit
+       (43%) and Legal (53%) is well-calibrated.
+
+  C) MEDIUM RISK (Moderate Performance)
+     - Net Reward: Rs. 515,542 (positive but modest)
+     - Action Profile: 29% Legal, 27% Field Visit, 32% SMS, 13% No Action
+     - Correctness: 58.4% (below acceptable threshold)
+     - Interpretation: The agent is too aggressive. For Medium risk borrowers
+       (3-6 overdue months), the optimal mix should lean toward Field Visit
+       (40%) and SMS (30%), with Legal as a last resort (20%). Instead, the
+       agent applies Legal 29% of the time — higher than optimal.
+     - ISSUE: The agent treats Medium risk more like High risk.
+
+  D) VERY LOW RISK (Negative Performance but High Correctness)
+     - Net Reward: -Rs. 296,883 (loss)
+     - Action Profile: 61% SMS, 34% No Action, 4% Legal, 1% Field Visit
+     - Correctness: 94.9% (action distribution looks right)
+     - Interpretation: The agent chooses the RIGHT actions (mostly SMS and
+       No Action), but still loses money. This is because even SMS costs
+       Rs. 30 per borrower and recovery rates are very low (8.8%) for
+       borrowers who are barely overdue (0-1 months). The agent is choosing
+       correctly but the economics don't work for this group.
+     - RECOMMENDATION: Increase "No Action" weight for Very Low risk,
+       possibly to 50%+.
+
+  E) LOW RISK (CRITICAL FAILURE)
+     - Net Reward: -Rs. 1,299,226 (largest per-decision loss)
+     - Action Profile: 34% SMS, 24% Legal, 21% Field Visit, 21% No Action
+     - Correctness: 54.9% (worst across all categories)
+     - Interpretation: THIS IS THE BIGGEST PROBLEM. For Low risk borrowers
+       (1-3 overdue months), the agent should use SMS/Call (50-60%) and
+       occasional Field Visit (25%). Instead, it applies Legal Notice 24%
+       of the time and Field Visit 21% — these are far too aggressive.
+     - The penalty for using Legal on Low risk borrowers (Rs. 800 cost +
+       35% of total_demand penalty) far outweighs any recovery gains.
+     - RECOMMENDATION: The reward function's penalty for Legal on Low risk
+       is not strong enough. Increase the penalty multiplier from 0.35 to
+       0.6+ to discourage over-escalation.
+
+================================================================================
+4. CONFUSION MATRIX: AGENT ACTIONS VS OPTIMAL ACTIONS
+================================================================================
+
+  Action % by Risk Category:
+  ┌───────────┬───────────┬───────────┬────────────┬──────────────┐
+  │ Risk      │ No Action │ SMS/Call  │ Field Visit│ Legal Notice │
+  ├───────────┼───────────┼───────────┼────────────┼──────────────┤
+  │ Very Low  │ 33.6%     │ 61.3%     │ 1.1%       │ 3.9%         │
+  │ Low       │ 20.9%     │ 34.2%     │ 20.6%      │ 24.2%        │
+  │ Medium    │ 12.6%     │ 31.6%     │ 26.8%      │ 29.0%        │
+  │ High      │ 1.8%      │ 2.3%      │ 42.8%      │ 53.1%        │
+  │ Very High │ 0.1%      │ 0.1%      │ 38.8%      │ 61.0%        │
+  └───────────┴───────────┴───────────┴────────────┴──────────────┘
+
+  Overall Correctness (picking top-2 optimal action): 89.28%
+
+  By Risk:
+    Very High: 99.8%  [EXCELLENT]
+    High:      95.9%  [EXCELLENT]
+    Very Low:  94.9%  [GOOD - actions correct but still losing money]
+    Medium:    58.4%  [POOR - too aggressive]
+    Low:       54.9%  [POOR - significantly over-escalating]
+
+INTERPRETATION:
+  The agent has learned excellent policies for high-risk borrowers but
+  fails to differentiate Medium/Low risk from High risk. It treats
+  everything above "Very Low" as requiring aggressive collection.
+
+================================================================================
+5. BASELINE COMPARISON
+================================================================================
+
+  Policy        Episodes  Decisions  Net Reward    Avg Reward
+  ───────────── ───────── ────────── ───────────── ──────────
+  Random        20        2,000      -Rs. 16.17M   -Rs. 8,086
+  Rule-Based    20        2,000      +Rs. 7.34M    +Rs. 3,671
+  PPO (Ours)    50        5,000      +Rs. 12.57M   +Rs. 2,513
+
+ANALYSIS:
+  1. Random policy: Catastrophic (-Rs. 16.17M). Randomly choosing actions
+     on high-risk borrowers without strategy results in massive penalties.
+
+  2. Rule-Based: Solid performance (+Rs. 7.34M, Rs. 3,671/decision). The
+     simple heuristic (Low->SMS, Medium->Field Visit, High->Field Visit,
+     Very High->Legal) works remarkably well and achieves higher per-decision
+     reward than the PPO agent.
+
+  3. PPO Agent: Best total reward (+Rs. 12.57M) but lower per-decision
+     reward (Rs. 2,513) than rule-based (Rs. 3,671). The PPO agent processes
+     more borrowers overall (it encounters more High/Very High risk borrowers
+     due to the stratified distribution), which inflates total reward.
+
+  KEY INSIGHT: The rule-based policy achieves 46% higher per-decision reward
+  than the PPO agent. This means:
+    a) The PPO agent hasn't surpassed a well-tuned heuristic in efficiency
+    b) The PPO agent's advantage is in handling edge cases and nuanced
+       borrower profiles that rules can't capture (e.g., GAT embeddings
+       revealing hidden risk)
+    c) The reward function may need tuning to push the PPO past the rule-based
+       ceiling
+
+================================================================================
+6. ABLATION STUDY: FEATURE SUBSET IMPACT
+================================================================================
+
+  Feature Set       Features  Net Reward    ROI     Resolved%  Confidence
+  ───────────────── ───────── ───────────── ─────── ────────── ──────────
+  baseline          8         -Rs. 15.05M   0.72    4.98%      92.3%
+  +structural       11        -Rs. 15.77M   0.33    4.55%      86.7%
+  +community        10        +Rs. 0.99M    24.91   21.65%     38.1%
+  +multihop         11        -Rs. 16.56M   0.32    4.76%      76.4%
+  +all_graph        16        +Rs. 1.74M    42.41   25.87%     78.1%
+  full (all)        150       -Rs. 15.43M   0.28    3.90%      49.9%
+
+CRITICAL FINDINGS:
+
+  A) GRAPH FEATURES ARE ESSENTIAL
+     Baseline (8 core features only): -Rs. 15.05M (disastrous)
+     +all_graph (16 features with GNN): +Rs. 1.74M (profitable)
+     Difference: Rs. 16.79M improvement
+
+     This PROVES that graph-derived features (GAT embeddings, community
+     risk, multi-hop signals) are critical for the agent to make any
+     profitable decisions at all.
+
+  B) COMMUNITY FEATURES ARE THE SINGLE MOST IMPORTANT ADDITION
+     +community alone: +Rs. 0.99M (first profitable config)
+     This suggests that knowing "my borrower is in a 60% high-risk community"
+     is more valuable than knowing individual structural features.
+
+  C) STRUCTURAL FEATURES (degree, pagerank, betweenness) HURT PERFORMANCE
+     baseline: -Rs. 15.05M
+     +structural: -Rs. 15.77M (worse)
+     Adding node centrality metrics confuses the agent. These features may
+     correlate with risk in ways that mislead the policy during short training.
+
+  D) MULTI-HOP SIGNALS ALSO HURT
+     +multihop: -Rs. 16.56M (worst non-full config)
+     The 2-hop and 3-hop neighborhood signals add noise rather than signal.
+     The 1-hop signal alone may be sufficient.
+
+  E) THE FULL 150-FEATURE MODEL FAILS
+     full (all): -Rs. 15.43M (catastrophic, similar to baseline)
+     With 150 features (including 16 GAT embeddings across multiple dimensions),
+     the agent suffers from the curse of dimensionality. With only 50,000
+     training timesteps, 150 features means ~333 samples per feature —
+     far too few for reliable learning.
+
+  RECOMMENDATION: The optimal feature set is +all_graph (16 features) or
+  +community (10 features). Avoid the full 150-dimensional set unless
+  training timesteps are increased 10x.
+
+================================================================================
+7. STRENGTHS OF THE CURRENT MODEL
+================================================================================
+
+  1. EXCELLENT HIGH-RISK HANDLING
+     The agent achieves 99.8% correctness on Very High risk and 95.9% on
+     High risk. It correctly identifies the most dangerous borrowers and
+     applies appropriate escalation.
+
+  2. HIGH CONFIDENCE DECISIONS
+     91.95% average confidence means the agent has learned clear decision
+     boundaries. Only 0.1% of decisions are flagged as uncertain.
+
+  3. GRAPH FEATURES WORK
+     The ablation study conclusively proves that graph-enhanced features
+     transform the agent from losing Rs. 15M to making Rs. 1.74M.
+
+  4. POSITIVE ROI
+     32.25x ROI means the system is economically viable. Every Rs. 1
+     spent on collection actions returns Rs. 32.25.
+
+================================================================================
+8. WEAKNESSES AND RECOMMENDATIONS
+================================================================================
+
+  ISSUE 1: OVER-ESCALATION ON LOW RISK (CRITICAL)
+    Problem: 24% Legal Notice on Low risk borrowers (should be 0-5%)
+    Impact: -Rs. 1.3M loss on just 339 Low risk decisions
+    Fix: Increase penalty for Legal on Low risk from 0.35 to 0.6+ in
+         debt_env.py reward function
+
+  ISSUE 2: UNDER-UTILIZATION OF NO ACTION ON VERY LOW RISK
+    Problem: Only 34% No Action on Very Low risk (should be 50%+)
+    Impact: -Rs. 297K loss from unnecessary SMS costs
+    Fix: Increase reward for No Action on Very Low risk borrowers who
+         have 0 overdue months
+
+  ISSUE 3: MEDIUM RISK TREATED LIKE HIGH RISK
+    Problem: 29% Legal on Medium risk (should be 20%)
+    Impact: 58.4% correctness (barely above random for 4 actions = 50%)
+    Fix: Add a "warning" reward tier for Medium risk that penalizes
+         Legal unless overdue_months > 5
+
+  ISSUE 4: CURSE OF DIMENSIONALITY WITH FULL FEATURE SET
+    Problem: 150 features with 50K timesteps = 333 samples/feature
+    Impact: Full model performs as badly as baseline (-Rs. 15.4M)
+    Fix: Use +all_graph (16 features) for production. If full features
+         are needed, increase training to 500K+ timesteps
+
+  ISSUE 5: PPO DOESN'T SURPASS RULE-BASED IN EFFICIENCY
+    Problem: Rule-based achieves Rs. 3,671/decision vs PPO's Rs. 2,513
+    Impact: PPO is 46% less efficient per decision
+    Fix: Consider hybrid approach — use rule-based for Low/Medium risk
+         (where rules work well) and PPO for High/Very High (where PPO
+         adds nuance through graph features)
+
+================================================================================
+9. RECOMMENDED NEXT STEPS
+================================================================================
+
+  PRIORITY 1: Fix Low/Medium risk over-escalation
+    - Modify debt_env.py reward penalties for Legal on Low risk
+    - Retrain and re-evaluate
+    - Expected: +Rs. 1.5M improvement from Low/Medium risk recovery
+
+  PRIORITY 2: Optimal feature set selection
+    - Use +all_graph (16 features) for production
+    - Drop structural features (degree, pagerank, betweenness)
+    - Drop multi-hop signals (keep only 1-hop)
+    - Expected: Higher confidence, faster training, better performance
+
+  PRIORITY 3: Increase training duration for full feature model
+    - If using all 150 features, increase timesteps from 50K to 500K
+    - Expected: Full model may surpass +all_graph with sufficient training
+
+  PRIORITY 4: Hybrid rule-based + PPO policy
+    - Use rule-based for Very Low and Low risk (where rules excel)
+    - Use PPO for Medium, High, Very High (where nuance matters)
+    - Expected: Best of both worlds — rule efficiency + PPO sophistication
+
+================================================================================
+END OF REPORT
+================================================================================

@@ -1,0 +1,1022 @@
+================================================================================
+EXPLAINABLE AI (XAI) IMPLEMENTATION REPORT
+Explainable AI for Debt Collection — Full Explainability Enhancement Plan
+================================================================================
+
+TABLE OF CONTENTS:
+  Part A: Why Explainability Matters for THIS Project
+  Part B: What Explainability We Have NOW
+  Part C: Every Explainability Technique (Detailed Breakdown)
+  Part D: How Each Technique Integrates into the Existing Pipeline
+  Part E: Implementation Order, Dependencies & Effort Estimates
+  Part F: Expected Outputs — What the End User Will See
+  Part G: Full Pipeline After All XAI Enhancements
+
+================================================================================
+PART A: WHY EXPLAINABILITY MATTERS FOR THIS PROJECT
+================================================================================
+
+Your project is called "Explainable AI for Debt Collection." But currently,
+there is NO actual explainability component. Here's why it's critical:
+
+1. REGULATORY COMPLIANCE
+   Financial AI systems in many jurisdictions (EU AI Act, US CFPB guidelines,
+   RBI India) require decisions affecting consumers to be explainable.
+   A debtor has the right to know WHY a particular collection action was chosen.
+
+2. TRUST & ADOPTION
+   Collection managers won't trust a black-box RL agent that says "use Legal
+   Notice for this borrower" without understanding the reasoning.
+
+3. DEBUGGING & IMPROVEMENT
+   If the RL agent makes a bad decision, you need to know WHY:
+   - Was it the GNN embedding misleading it?
+   - Was it over-weighting a particular feature?
+   - Was the reward function misaligned?
+
+4. RESEARCH VALIDATION
+   A paper titled "Explainable AI for Debt Collection" MUST include:
+   - Feature importance analysis
+   - Decision-level explanations
+   - Counterfactual examples
+   Without these, the "Explainable" in the title is unjustified.
+
+5. BIAS DETECTION
+   Does the RL agent systematically treat certain occupations or regions
+   more harshly? Explainability tools can reveal this.
+
+================================================================================
+PART B: WHAT EXPLAINABILITY WE HAVE NOW
+================================================================================
+
+CURRENT STATE: ZERO formal explainability.
+
+What exists:
+  - The graph provides a "neighborhood_stress_signal" — this is implicitly
+    a form of explanation ("your neighbors are risky"), but it's not
+    presented as an explanation. It's just another feature.
+
+  - The reward function encodes some human logic (penalties for wrong
+    actions on risk profiles), but this is about reward design, not
+    explaining the agent's decisions.
+
+  - Visualization plots show correlations and distributions, but they
+    explain the DATA, not the MODEL's decisions.
+
+What's MISSING:
+  ✗ No feature importance for RL decisions
+  ✗ No per-decision explanations
+  ✗ No counterfactual analysis
+  ✗ No GNN explainability (why did the GAT assign this embedding?)
+  ✗ No global model behavior summary
+  ✗ No fairness/bias analysis
+  ✗ No "what would change the decision" analysis
+  ✗ No confidence scores on decisions
+  ✗ No trajectory explanation for multi-step reasoning
+
+================================================================================
+PART C: EVERY EXPLAINABILITY TECHNIQUE (Detailed Breakdown)
+================================================================================
+
+XAI TECHNIQUE 1: SHAP Analysis on RL Decisions
+────────────────────────────────────────────────
+WHAT IT IS:
+  SHAP (SHapley Additive exPlanations) decomposes any model's output into
+  the contribution of each input feature using cooperative game theory.
+
+  For a single decision, SHAP tells you:
+    "The RL agent chose 'Legal Notice' because:
+     - CIBIL score contributed -0.3 (low CIBIL pushed toward legal)
+     - Neighborhood stress contributed +0.2 (risky neighbors)
+     - Income contributed +0.1 (low income → less responsive to SMS)
+     - GAT embedding dim 7 contributed +0.15 (encodes high-risk cluster)"
+
+HOW IT WORKS:
+  SHAP computes Shapley values from cooperative game theory:
+
+    φ_i(v) = Σ_{S ⊆ N\{i}} |S|! * (|N|-|S|-1)! / |N|! * [v(S ∪ {i}) - v(S)]
+
+  In practice, KernelSHAP approximates this by:
+    1. Taking the observation vector x (34 dimensions)
+    2. Randomly masking subsets of features
+    3. Running the masked observation through the RL policy
+    4. Measuring how much each feature's absence changes the action
+       probabilities
+
+WHAT IT EXPLAINS:
+  - Global: Which features matter MOST across all decisions?
+  - Local: Why did the agent choose THIS action for THIS borrower?
+  - Directional: Did a feature push toward or away from a specific action?
+
+WHY IT MATTERS FOR YOUR PROJECT:
+  - Directly answers: "Why did the RL agent recommend Field Visit instead
+    of SMS for borrower ACC_12345?"
+  - Proves the GNN embeddings actually influence decisions (or reveals
+    they don't — which is also valuable)
+  - Shows whether the agent learned meaningful patterns or spurious
+    correlations
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 2: Counterfactual Explanations
+────────────────────────────────────────────
+WHAT IT IS:
+  A counterfactual answer to: "What MINIMAL changes to this borrower's
+  profile would have led to a DIFFERENT action?"
+
+  Example output:
+    "Current decision: Legal Notice
+     Counterfactual: If CIBIL score were 680 instead of 520, the agent
+     would have chosen SMS/Call instead.
+     Minimum change needed: +160 CIBIL points OR -3 overdue months"
+
+HOW IT WORKS:
+  Algorithm (gradient-based counterfactual search):
+    1. Start with the borrower's actual observation x
+    2. The RL policy outputs action probabilities π(a|x)
+    3. Define a target action a_target (e.g., "SMS" instead of "Legal")
+    4. Optimize a counterfactual x' that:
+       a. Maximizes π(a_target | x')
+       b. Minimizes distance ||x' - x|| (minimal changes)
+       c. Respects feature constraints (e.g., age can't decrease)
+
+    Loss function:
+      L(x') = -log(π(a_target | x')) + λ * ||x' - x||_1 + constraints
+
+  For categorical features (occupation, region), use one-hot relaxation
+  and round to nearest valid category.
+
+WHAT IT EXPLAINS:
+  - "What would need to change for a different outcome?"
+  - Actionable recourse for debtors: "Pay 2 months overdue → lighter action"
+  - Feature sensitivity: Which features are decision boundaries?
+
+WHY IT MATTERS:
+  - Provides DEBTOR-FACING explanations (not just analyst-facing)
+  - Shows the agent's decision boundaries are reasonable
+  - Enables "what-if" scenario planning for collection managers
+  - Directly supports the "Explainable" claim in your project title
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 3: GNN Explainability (GNNExplainer / Attention Analysis)
+───────────────────────────────────────────────────────────────────────
+WHAT IT IS:
+  Since you're using a GAT (Graph Attention Network), you have TWO
+  sources of explainability for the graph component:
+
+  A) ATTENTION WEIGHTS (built-in, free):
+     The GAT learns attention coefficients α(i,j) for each neighbor j
+     of node i. These directly tell you WHICH neighbors influenced
+     this node's embedding the most.
+
+     Example:
+       "Borrower ACC_12345's GAT embedding was most influenced by:
+        - Neighbor ACC_67890 (attention weight: 0.35) — Very High risk
+        - Neighbor ACC_23456 (attention weight: 0.28) — High risk
+        - Neighbor ACC_78901 (attention weight: 0.15) — Medium risk"
+
+  B) GNNExplainer (post-hoc):
+     For any GNN prediction, GNNExplainer finds:
+       - Which input features (among the 8 node features) matter most?
+       - Which edges (connections) matter most?
+
+     It produces a subgraph explanation:
+       "The GAT classified this borrower as High Risk because of
+        a 3-node subgraph involving their top 2 influential neighbors,
+        driven primarily by overdue_months and bounce_count features."
+
+HOW IT WORKS:
+
+  A) Attention Weights (from GAT):
+     During GAT forward pass:
+       α(i,j) = softmax(LeakyReLU(a^T [Wh_i || Wh_j]))
+
+     You can extract these directly:
+       _, attention_weights = self.conv1(x, edge_index, return_attention_weights=True)
+       # attention_weights[0] = edge indices
+       # attention_weights[1] = attention coefficients
+
+     For each borrower, sort their neighbors by attention weight to
+     find the most influential ones.
+
+  B) GNNExplainer:
+     Optimizes a mask M over features and edges:
+       max I(y; x_M, A_M)  // mutual information between prediction and masked input
+
+     Returns:
+       - Feature mask: [0.9, 0.1, 0.8, 0.05, ...] (feature importance)
+       - Edge mask: which edges in the computation graph matter
+
+WHAT IT EXPLAINS:
+  - "Which neighbors caused this borrower's risky GAT embedding?"
+  - "Which features (income, CIBIL, overdue) drove the GNN's assessment?"
+  - "Is the GAT focusing on meaningful connections or noise?"
+
+WHY IT MATTERS:
+  - This is the KEY link between your graph and your explainability claim
+  - Shows the GAT isn't a black box — its attention mechanism IS
+    an explanation
+  - Reveals whether the contagion hypothesis is valid: does the GAT
+    actually attend to risky neighbors?
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 4: Global Feature Importance (Permutation Importance)
+───────────────────────────────────────────────────────────────────
+WHAT IT IS:
+  Measure how much each feature contributes to the RL agent's overall
+  performance by shuffling one feature at a time and measuring the
+  degradation in total recovery.
+
+HOW IT WORKS:
+  1. Run the trained PPO agent on the test set → record baseline reward
+  2. For each feature f:
+     a. Shuffle feature f across all borrowers (destroy its information)
+     b. Run the agent again → record new reward
+     c. Importance(f) = baseline_reward - shuffled_reward
+
+  Example output:
+    Feature Importance for RL Agent Performance:
+    ┌─────────────────────────────────┬───────────┐
+    │ Feature                         │ Importance│
+    ├─────────────────────────────────┼───────────┤
+    │ overdue_months                  │   23.5%   │
+    │ cibil_score                     │   18.2%   │
+    │ gat_embedding_3                 │   12.1%   │
+    │ neighborhood_stress_1hop        │    8.7%   │
+    │ gat_embedding_7                 │    6.4%   │
+    │ coll_success_rate               │    5.9%   │
+    │ community_risk_pct              │    4.8%   │
+    │ income                          │    3.2%   │
+    │ ...                             │    ...   │
+    └─────────────────────────────────┴───────────┘
+
+WHAT IT EXPLAINS:
+  - "Which features does the RL agent rely on MOST?"
+  - "Do the GNN embeddings actually matter for performance?"
+  - "Is the agent over-fitting to noise features?"
+
+WHY IT MATTERS:
+  - Validates that your graph features (GAT embeddings, multi-hop signals,
+    community features) actually contribute to decisions
+  - If graph features rank LOW, you know the architecture needs adjustment
+  - Provides a single summary for stakeholders: "Here's what the model
+    cares about"
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 5: Policy Visualization (Decision Heatmaps)
+─────────────────────────────────────────────────────────
+WHAT IT IS:
+  Visualize the RL agent's policy as interpretable charts showing which
+  actions it prefers under different conditions.
+
+VISUALIZATION TYPES:
+
+  A) RISK × ACTION PREFERENCE:
+     Bar chart showing, for each risk category, the agent's action
+     distribution:
+       Very Low: 60% No Action, 35% SMS, 4% Field Visit, 1% Legal
+       High:     2% No Action, 15% SMS, 55% Field Visit, 28% Legal
+
+     → Shows the agent learned appropriate risk-action mapping
+
+  B) OVERDUE × INCOME HEATMAP:
+     2D grid with overdue_months on x-axis, income on y-axis,
+     colored by preferred action.
+
+     → Shows the agent's decision surface
+
+  C) GAT EMBEDDING SPACE PROJECTION:
+     Use t-SNE/UMAP to project 16-dim GAT embeddings to 2D,
+     color each point by the agent's preferred action.
+
+     → Shows if the GAT embedding space clusters by decision type
+
+  D) NEIGHBORHOOD STRESS vs ACTION:
+     Line plot: as 1-hop stress increases from 0→10, how does the
+     preferred action shift?
+
+     → Shows the agent learned contagion-aware behavior
+
+WHAT IT EXPLAINS:
+  - Global behavior patterns of the agent
+  - Whether the agent's strategy aligns with human intuition
+  - The "shape" of the agent's decision-making
+
+WHY IT MATTERS:
+  - These are the most STAKEHOLDER-FRIENDLY explanations
+  - A collection manager can look at the Risk×Action chart and immediately
+    assess whether the agent makes sense
+  - The embedding visualization proves the GAT produces meaningful structure
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 6: Trajectory Analysis (Episode-Level Explanations)
+─────────────────────────────────────────────────────────────────
+WHAT IT IS:
+  For each episode (100 borrowers), generate a step-by-step narrative:
+
+    "Episode #42:
+     Step 1: Borrower ACC_12345 | Risk: High | Action: Field Visit | Reward: +2340
+              Reason: High risk + high community_risk_pct → escalate
+     Step 2: Borrower ACC_67890 | Risk: Very Low | Action: No Action | Reward: 0
+              Reason: Very Low risk + low stress → no action needed
+     Step 3: Borrower ACC_11111 | Risk: Medium | Action: SMS | Reward: +890
+              Reason: Medium risk + high coll_success_rate → try SMS first
+
+     Total Episode Reward: +15,430
+     Action Distribution: 30% No Action, 40% SMS, 20% Field Visit, 10% Legal"
+
+HOW IT WORKS:
+  During evaluation, for each step:
+    1. Record observation, chosen action, reward
+    2. Run SHAP on the policy for that observation
+    3. Generate a one-line explanation using top-3 SHAP features
+
+  Aggregate at episode level:
+    - Total reward, action distribution
+    - Most/least profitable decisions
+    - Feature importance across the episode
+
+WHAT IT EXPLAINS:
+  - How the agent behaves over a realistic work sequence
+  - Whether it allocates effort efficiently across borrowers
+  - Case-by-case reasoning
+
+WHY IT MATTERS:
+  - This is what a collection manager would see in a real dashboard
+  - Demonstrates the agent can explain its actions in real-time
+  - Useful for debugging: spot where the agent made a bad call and why
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 7: Fairness and Bias Analysis
+────────────────────────────────────────────
+WHAT IT IS:
+  Audit whether the RL agent treats different demographic groups fairly.
+
+  Questions to answer:
+    - Does the agent recommend Legal Notice more often for certain
+      occupations?
+    - Are borrowers in certain regions subjected to harsher actions?
+    - Is there a correlation between age and action severity?
+    - Does the GAT embedding encode demographic bias?
+
+HOW IT WORKS:
+  For each demographic group (occupation, region, age bracket):
+    1. Compute action distribution:
+       P(action | group) for each of the 4 actions
+    2. Compute average reward per group
+    3. Compute action severity score:
+       severity(No Action)=0, severity(SMS)=1, severity(Field Visit)=2,
+       severity(Legal)=3
+    4. Compare severity across groups
+
+  Statistical tests:
+    - Chi-squared test: Is action distribution independent of occupation?
+    - ANOVA: Is mean reward different across regions?
+    - Correlation: Does severity correlate with age?
+
+  Example output:
+    ┌────────────────────┬──────────────┬───────────────┬──────────┐
+    │ Occupation         │ Avg Severity │ % Legal Action│ Avg Rew. │
+    ├────────────────────┼──────────────┼───────────────┼──────────┤
+    │ Salaried           │    1.2       │     5%        │  +1200   │
+    │ Self-employed      │    1.4       │     8%        │  +1100   │
+    │ Agriculturalist    │    1.8       │    15%        │   +900   │
+    │ Daily wage worker  │    2.3       │    25%        │   +600   │
+    └────────────────────┴──────────────┴───────────────┴──────────┘
+
+    ⚠ BIAS DETECTED: Daily wage workers receive 5× more Legal actions
+      than Salaried workers, even after controlling for risk category.
+
+WHAT IT EXPLAINS:
+  - Whether the agent has learned societal biases from the data
+  - If the graph amplifies or mitigates bias (e.g., do GAT embeddings
+    reduce occupation-based disparity?)
+  - Regulatory compliance readiness
+
+WHY IT MATTERS:
+  - If your agent systematically treats certain groups more harshly,
+    this is a legal liability
+  - The XAI narrative requires you to SHOW the agent isn't biased
+  - This is a strong research contribution: "We demonstrate our
+    graph-based approach reduces demographic bias in collection actions"
+
+────────────────────────────────────────────────
+
+XAI TECHNIQUE 8: Confidence Scores & Uncertainty Quantification
+───────────────────────────────────────────────────────────────
+WHAT IT IS:
+  The PPO agent outputs action probabilities. Instead of just picking
+  argmax, report the confidence:
+
+    "Action: Field Visit
+     Confidence: 78%  (P(Field Visit) = 0.78)
+     Alternatives: SMS (15%), Legal (5%), No Action (2%)
+
+     → High confidence: agent is sure Field Visit is best
+
+    vs.
+
+    "Action: SMS
+     Confidence: 28%  (P(SMS) = 0.28)
+     Alternatives: Field Visit (27%), Legal (25%), No Action (20%)
+
+     → Low confidence: agent is uncertain — flag for human review"
+
+HOW IT WORKS:
+  PPO's policy network outputs a categorical distribution:
+    π(a|x) = softmax(h(x))
+
+  Where h(x) is the final layer logits. Extract these directly:
+    action_dist = model.policy.get_distribution(obs)
+    action_probs = action_dist.distribution.probs.detach().numpy()
+
+  Then compute:
+    - Confidence = max(action_probs)
+    - Entropy = -Σ p * log(p)  (higher = more uncertain)
+    - Margin = max_prob - second_max_prob
+
+  Use entropy to flag uncertain decisions for human review.
+
+WHAT IT EXPLAINS:
+  - "How sure is the agent about this decision?"
+  - When to trust the agent vs. escalate to a human
+
+WHY IT MATTERS:
+  - In production, you wouldn't want to blindly follow the agent's
+    advice when it's uncertain
+  - Adds a "human-in-the-loop" pathway for low-confidence decisions
+  - Demonstrates the system knows when it doesn't know
+
+================================================================================
+PART D: HOW EACH TECHNIQUE INTEGRATES INTO THE EXISTING PIPELINE
+================================================================================
+
+CURRENT PIPELINE:
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │ graph_builder│───▶│ debt_env.py  │───▶│ PPO Training │
+  └──────────────┘    └──────────────┘    └──────────────┘
+
+PROPOSED XAI PIPELINE:
+  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+  │ graph_builder│───▶│ debt_env.py  │───▶│ PPO Training │
+  └──────────────┘    └──────────────┘    └──────┬───────┘
+                                                 │
+                                    ┌────────────▼────────────┐
+                                    │   XAI Analysis Module   │
+                                    │                         │
+                                    │ 1. SHAP analysis        │
+                                    │ 2. Counterfactuals      │
+                                    │ 3. GNN explanations     │
+                                    │ 4. Feature importance   │
+                                    │ 5. Policy visualization │
+                                    │ 6. Trajectory reports   │
+                                    │ 7. Fairness audit       │
+                                    │ 8. Confidence scores    │
+                                    └────────────┬────────────┘
+                                                 │
+                                    ┌────────────▼────────────┐
+                                    │   XAI Output Reports    │
+                                    │                         │
+                                    │ - xai_global_report.pdf │
+                                    │ - xai_borrower_reports/ │
+                                    │ - fairness_audit.csv    │
+                                    │ - policy_plots/         │
+                                    │ - counterfactuals.csv   │
+                                    └─────────────────────────┘
+
+INTEGRATION POINT 1: SHAP Analysis
+────────────────────────────────────
+File: NEW — xai_analysis.py
+
+Integration:
+  - Loads trained PPO model and VecNormalize stats
+  - Extracts the policy network: model.policy
+  - For a set of test observations, runs KernelSHAP
+  - SHAP explainer wraps the policy network:
+
+      def policy_wrapper(obs_batch):
+          """Convert observations to action probabilities."""
+          obs_tensor = torch.tensor(obs_batch).to(device)
+          dist = model.policy.get_distribution(obs_tensor)
+          probs = dist.distribution.probs.cpu().detach().numpy()
+          return probs  # shape: (n_samples, 4)
+
+      explainer = shap.KernelExplainer(policy_wrapper, background_obs)
+      shap_values = explainer.shap_values(test_obs)
+
+  - Output: SHAP summary plot, per-borrower explanation files
+
+Changes to existing files: NONE
+  (SHAP analysis is post-hoc — runs after training)
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 2: Counterfactual Explanations
+─────────────────────────────────────────────────
+File: NEW — xai_analysis.py (same file as SHAP)
+
+Integration:
+  - For a given borrower with observation x and chosen action a_chosen:
+    1. Define target action a_target (next best alternative)
+    2. Optimize x' to maximize π(a_target|x') while minimizing ||x'-x||
+    3. Use L-BFGS or gradient descent with feature constraints
+
+  Feature constraints:
+    - age: can only increase (can't make borrower younger)
+    - income: can increase or decrease within ±50%
+    - cibil_score: can only increase (improving credit)
+    - overdue_months: can only decrease (paying off debt)
+    - GAT embeddings: treated as fixed (can't directly change embedding)
+
+  Implementation sketch:
+    def generate_counterfactual(obs, target_action, model, feature_bounds):
+        x_cf = obs.clone()
+        optimizer = torch.optim.LBFGS([x_cf], lr=0.1)
+
+        def closure():
+            optimizer.zero_grad()
+            probs = policy_wrapper(x_cf.unsqueeze(0))
+            loss = -torch.log(probs[0, target_action] + 1e-8)
+            loss += 0.1 * torch.norm(x_cf - obs, p=1)  # minimality
+            loss += constraint_penalty(x_cf, feature_bounds)
+            loss.backward()
+            return loss
+
+        for _ in range(100):
+            optimizer.step(closure)
+
+        return x_cf
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 3: GNN Explainability
+────────────────────────────────────────
+File: Modified — graph_builder.py (add attention extraction)
+
+Integration:
+  - During GAT forward pass, capture attention weights:
+
+      # In GATWithEmbedding.forward():
+      x, (edge_idx, attn_weights) = self.conv1(x, edge_index,
+          return_attention_weights=True)
+
+  - Save attention weights to a separate file:
+
+      attn_df = pd.DataFrame({
+          'source_node': edge_idx[0].numpy(),
+          'target_node': edge_idx[1].numpy(),
+          'attention_weight': attn_weights.mean(dim=0).numpy(),  # avg across heads
+      })
+      attn_df.to_csv("gat_attention_weights.csv", index=False)
+
+  - For each borrower, find top-5 influential neighbors:
+
+      def get_top_neighbors(borrower_id, attn_df, df, k=5):
+          neighbors = attn_df[attn_df['target_node'] == borrower_id]
+          top_k = neighbors.nlargest(k, 'attention_weight')
+          return df.iloc[top_k['source_node']]
+
+  - Output: gat_attention_weights.csv + neighbor explanation per borrower
+
+Changes to existing files:
+  - graph_builder.py: Add attention extraction in the GAT forward pass
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 4: Feature Importance (Permutation)
+──────────────────────────────────────────────────────
+File: NEW — xai_analysis.py
+
+Integration:
+  - Runs after training, uses the test environment:
+
+      # Baseline performance
+      baseline_reward = evaluate_agent(model, env, n_episodes=50)
+
+      # Per-feature importance
+      importance = {}
+      for col in feature_cols:
+          # Shuffle this column
+          env.df[f'{col}_shuffled'] = env.df[col].sample(frac=1).values
+          shuffled_reward = evaluate_agent_with_shuffled_feature(
+              model, env, col, n_episodes=50
+          )
+          importance[col] = baseline_reward - shuffled_reward
+
+  - Output: feature_importance.csv + bar chart
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 5: Policy Visualization
+──────────────────────────────────────────
+File: NEW — xai_analysis.py (or separate xai_visualizations.py)
+
+Integration:
+  - Runs the trained agent on the full dataset
+  - Collects action distributions per risk category, per feature bin
+  - Generates plots:
+
+      # Risk × Action distribution
+      for risk in risk_categories:
+          subset = df[df['risk_category'] == risk]
+          actions = [predict_action(model, obs) for obs in subset]
+          action_dist = np.bincount(actions, minlength=4) / len(actions)
+
+      # Embedding space visualization
+      from sklearn.manifold import TSNE
+      embeddings = df[[f'gat_embedding_{i}' for i in range(16)]].values
+      tsne = TSNE(n_components=2, random_state=42)
+      embedding_2d = tsne.fit_transform(embeddings)
+
+      # Color by preferred action
+      actions = [predict_action(model, obs) for obs in all_obs]
+      plt.scatter(embedding_2d[:, 0], embedding_2d[:, 1], c=actions, cmap='tab10')
+
+  - Output: policy_plots/ directory with 5-6 plot files
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 6: Trajectory Analysis
+──────────────────────────────────────────
+File: NEW — xai_analysis.py
+
+Integration:
+  - Runs a single episode and logs everything:
+
+      def analyze_trajectory(model, env, episode_id=0):
+          obs, _ = env.reset()
+          trajectory = []
+
+          for step in range(env.max_steps):
+              action, _ = model.predict(obs, deterministic=True)
+              action_probs = get_action_probs(model, obs)
+              next_obs, reward, done, _, _ = env.step(action)
+
+              # Get SHAP for this step
+              shap_vals = compute_shap(model, obs)
+
+              trajectory.append({
+                  'step': step,
+                  'borrower_id': env.df.iloc[env.current_row]['customer_id'],
+                  'risk': env.df.iloc[env.current_row]['risk_category'],
+                  'action': action_names[action],
+                  'action_probs': action_probs,
+                  'reward': reward,
+                  'top_3_features': get_top_shap_features(shap_vals),
+              })
+
+              obs = next_obs
+              if done: break
+
+          return pd.DataFrame(trajectory)
+
+  - Output: trajectory_reports/episode_XX.csv
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 7: Fairness Audit
+────────────────────────────────────
+File: NEW — fairness_audit.py
+
+Integration:
+  - Runs the agent on the full dataset
+  - Groups decisions by demographic attributes
+  - Computes statistical tests:
+
+      from scipy import stats
+
+      # Chi-squared test for occupation vs action
+      contingency_table = pd.crosstab(df['occupation'], df['chosen_action'])
+      chi2, p_value, dof, expected = stats.chi2_contingency(contingency_table)
+
+      if p_value < 0.05:
+          print(f"BIAS DETECTED: Action distribution depends on occupation (p={p_value})")
+
+      # ANOVA for reward across regions
+      groups = [df[df['region']==r]['reward'] for r in regions]
+      f_stat, p_val = stats.f_oneway(*groups)
+
+      if p_val < 0.05:
+          print(f"BIAS DETECTED: Rewards differ across regions (p={p_val})")
+
+  - Output: fairness_audit.csv + fairness_report.txt
+
+────────────────────────────────────────────────
+
+INTEGRATION POINT 8: Confidence Scores
+──────────────────────────────────────
+File: Modified — debt_env.py (minor change)
+
+Integration:
+  - Add a method to extract action probabilities:
+
+      def get_action_probs(model, obs):
+          obs_tensor = torch.tensor(obs).unsqueeze(0).to(device)
+          dist = model.policy.get_distribution(obs_tensor)
+          probs = dist.distribution.probs.cpu().detach().numpy()[0]
+          return probs  # [P(NoAction), P(SMS), P(FieldVisit), P(Legal)]
+
+  - In trajectory logging, include confidence:
+
+      confidence = max(probs)
+      entropy = -np.sum(probs * np.log(probs + 1e-8))
+      is_uncertain = entropy > threshold  # e.g., threshold = 1.2
+
+  - For production: flag uncertain decisions for human review
+
+Changes to existing files:
+  - debt_env.py: Add get_action_probs() helper (optional, for inference)
+  - New inference script: xai_inference.py (demonstrates real-time explanation)
+
+================================================================================
+PART E: IMPLEMENTATION ORDER & DEPENDENCIES
+================================================================================
+
+PHASE 1 — Core Explainability (highest priority):
+─────────────────────────────────────────────────
+  1. SHAP Analysis (XAI Technique 1)
+     Prerequisites: Trained PPO model
+     Effort: Medium (3-4 hours)
+     Blocks: Counterfactual analysis, trajectory analysis
+     File: NEW — xai_analysis.py
+     Why first: Most universally useful XAI technique; answers "why" for
+     every decision
+
+  2. GNN Attention Extraction (XAI Technique 3A)
+     Prerequisites: GAT model in graph_builder.py (already done)
+     Effort: Low (1 hour)
+     Blocks: GNNExplainer (3B)
+     File: Modify — graph_builder.py (add attention capture)
+     Why early: Built-in to GAT; minimal effort, high interpretability gain
+
+  3. Feature Importance (XAI Technique 4)
+     Prerequisites: Trained PPO model
+     Effort: Low (1-2 hours)
+     Blocks: Nothing
+     File: NEW — xai_analysis.py (same file as SHAP)
+     Why early: Quick global insight; validates graph features matter
+
+PHASE 2 — Advanced Explainability:
+───────────────────────────────────
+  4. Counterfactual Explanations (XAI Technique 2)
+     Prerequisites: SHAP analysis infrastructure
+     Effort: Medium (4-5 hours)
+     Blocks: Nothing
+     File: NEW — xai_analysis.py (extend existing file)
+     Why here: Requires policy wrapper from SHAP setup
+
+  5. Policy Visualization (XAI Technique 5)
+     Prerequisites: Trained PPO model
+     Effort: Medium (3-4 hours)
+     Blocks: Nothing
+     File: NEW — xai_visualizations.py
+     Why here: Depends on having the trained agent and SHAP results
+
+  6. Trajectory Analysis (XAI Technique 6)
+     Prerequisites: SHAP analysis
+     Effort: Medium (3-4 hours)
+     Blocks: Nothing
+     File: NEW — xai_analysis.py (extend existing file)
+     Why here: Reuses SHAP infrastructure for per-step explanations
+
+PHASE 3 — Production-Ready XAI:
+───────────────────────────────
+  7. Fairness Audit (XAI Technique 7)
+     Prerequisites: Agent run on full dataset
+     Effort: Medium (3-4 hours)
+     Blocks: Nothing
+     File: NEW — fairness_audit.py
+     Why later: Important but not needed for core XAI claim
+
+  8. Confidence Scores (XAI Technique 8)
+     Prerequisites: Trained PPO model
+     Effort: Low (1 hour)
+     Blocks: Nothing
+     File: Modify — debt_env.py (minor), NEW — xai_inference.py
+     Why later: Simple addition, most useful in deployment
+
+RECOMMENDED MINIMUM PATH (to justify "Explainable AI" in the title):
+  Phase 1 (SHAP + GNN Attention + Feature Importance)
+  + Phase 2.5 (Policy Visualization)
+
+  This gives you:
+    - Per-decision explanations (SHAP)
+    - Graph-level explanations (GAT attention)
+    - Global model understanding (feature importance)
+    - Stakeholder-friendly visualizations (policy plots)
+
+================================================================================
+PART F: EXPECTED OUTPUTS — WHAT THE END USER WILL SEE
+================================================================================
+
+OUTPUT 1: Global SHAP Summary Plot
+────────────────────────────────────
+  ┌──────────────────────────────────────────────────────────┐
+  │                                                          │
+  │   Feature                    SHAP Value (impact on action)│
+  │   ─────────────────────────  ──────────────────────────── │
+  │   overdue_months          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮     │
+  │   cibil_score             ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮           │
+  │   gat_embedding_3         ▮▮▮▮▮▮▮▮▮▮▮▮▮▮                 │
+  │   neighborhood_stress_1hop ▮▮▮▮▮▮▮▮▮▮▮                   │
+  │   gat_embedding_7         ▮▮▮▮▮▮▮▮▮▮                     │
+  │   community_risk_pct      ▮▮▮▮▮▮▮▮                       │
+  │   coll_success_rate       ▮▮▮▮▮▮▮                        │
+  │   income                  ▮▮▮▮▮                          │
+  │   node_degree             ▮▮▮▮                           │
+  │   age                     ▮▮▮                            │
+  │                                                          │
+  │  Color: 🔴 High feature value → pushes toward harsher    │
+  │         🔵 Low feature value → pushes toward lighter      │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+  Interpretation: "overdue_months is the #1 driver of collection actions,
+  followed by CIBIL score. GAT embedding dimension 3 (which encodes
+  neighborhood risk) is the 3rd most important feature — proving the
+  graph matters for decisions."
+
+────────────────────────────────────────────────
+
+OUTPUT 2: Per-Borrower Explanation (JSON/Text)
+───────────────────────────────────────────────
+  ┌──────────────────────────────────────────────────────────┐
+  │ EXPLANATION FOR BORROWER: ACC_00123                     │
+  │ ──────────────────────────────────────────────────────── │
+  │                                                          │
+  │  Profile:                                                │
+  │    Risk Category: High                                   │
+  │    CIBIL Score: 485                                      │
+  │    Overdue Months: 7                                     │
+  │    Income: ₹18,500                                       │
+  │    Occupation: Daily wage worker                         │
+  │    Region: R3                                            │
+  │                                                          │
+  │  RL Agent Decision: FIELD VISIT                          │
+  │  Confidence: 72%                                         │
+  │  Action Probabilities:                                   │
+  │    No Action:  3%                                        │
+  │    SMS/Call:  12%                                        │
+  │    Field Visit: 72%  ← CHOSEN                            │
+  │    Legal Notice: 13%                                     │
+  │                                                          │
+  │  Why this decision (SHAP):                               │
+  │    [+0.31] overdue_months=7 (high overdue → escalate)    │
+  │    [+0.18] gat_embedding_3 (encodes risky neighborhood)  │
+  │    [+0.12] cibil_score=485 (poor credit → less trust)   │
+  │    [-0.08] coll_success_rate=0.72 (good collector helps) │
+  │    [-0.04] income (low income → SMS less effective)      │
+  │                                                          │
+  │  Influential Neighbors (GAT Attention):                  │
+  │    1. ACC_00456 (attention: 0.34, risk: Very High)      │
+  │    2. ACC_00789 (attention: 0.27, risk: High)           │
+  │    3. ACC_00234 (attention: 0.19, risk: High)           │
+  │                                                          │
+  │  Counterfactual:                                         │
+  │    "If overdue_months were 3 instead of 7, the agent     │
+  │     would choose SMS/Call instead of Field Visit."       │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────
+
+OUTPUT 3: Fairness Audit Report
+─────────────────────────────────
+  ┌──────────────────────────────────────────────────────────┐
+  │ FAIRNESS AUDIT REPORT                                   │
+  │ ─────────────────────────────────────────────────────── │
+  │                                                          │
+  │  Action Severity by Occupation:                          │
+  │  ┌────────────────────┬──────────┬──────────┬──────────┐│
+  │  │ Occupation         │ Severity │ % Legal  │ p-value  ││
+  │  ├────────────────────┼──────────┼──────────┼──────────┤│
+  │  │ Salaried           │   1.15   │   4.2%   │          ││
+  │  │ Self-employed      │   1.32   │   6.8%   │          ││
+  │  │ Agriculturalist    │   1.61   │  12.1%   │  0.003*  ││
+  │  │ Daily wage worker  │   1.89   │  18.5%   │ <0.001***││
+  │  └────────────────────┴──────────┴──────────┴──────────┘│
+  │                                                          │
+  │  Chi-squared test: p = 0.001 (SIGNIFICANT)              │
+  │  → Action distribution depends on occupation             │
+  │  → POTENTIAL BIAS: Daily wage workers get 4.4× more      │
+  │    Legal actions than Salaried workers                   │
+  │                                                          │
+  │  After controlling for risk category:                    │
+  │  → Bias reduced but still significant (p = 0.041)       │
+  │  → Suggests agent uses occupation as proxy for risk      │
+  │                                                          │
+  │  Recommendation: Remove occupation from observation      │
+  │  space and retrain to eliminate this bias.               │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+────────────────────────────────────────────────
+
+OUTPUT 4: Policy Visualization Plots
+──────────────────────────────────────
+  Plot A: Risk × Action Distribution (stacked bar chart)
+  Plot B: Overdue × Income Heatmap (2D grid, colored by action)
+  Plot C: GAT Embedding t-SNE (2D scatter, colored by action)
+  Plot D: Neighborhood Stress → Action Shift (line plot)
+  Plot E: Confidence Distribution (histogram of decision certainty)
+
+================================================================================
+PART G: FULL PIPELINE AFTER ALL XAI ENHANCEMENTS
+================================================================================
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  graph_builder.py                                                      │
+  │  ─────────────────                                                     │
+  │  1. Build weighted contagion graph                                      │
+  │  2. Compute structural features (degree, pagerank, betweenness)         │
+  │  3. Detect communities (Louvain) → community risk metrics               │
+  │  4. Compute multi-hop signals (1-hop, 2-hop, 3-hop)                     │
+  │  5. Train GAT model → extract 16-dim embeddings                        │
+  │  6. ★ EXTRACT ATTENTION WEIGHTS → gat_attention_weights.csv            │
+  │  7. Save rl_ready_with_graph_features.csv                               │
+  └────────────────────────┬────────────────────────────────────────────────┘
+                           │
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  debt_env.py                                                           │
+  │  ───────────────                                                        │
+  │  1. Load enhanced CSV (34-dim observations)                             │
+  │  2. Train PPO agent                                                     │
+  │  3. Save model + VecNormalize stats                                     │
+  │  4. ★ CONFidence EXTRACTION: get_action_probs() method                  │
+  └────────────────────────┬────────────────────────────────────────────────┘
+                           │
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  xai_analysis.py (NEW)                                                  │
+  │  ─────────────────                                                      │
+  │  1. SHAP Analysis → shap_summary_plot.png, shap_per_decision.json       │
+  │  2. Counterfactual Explanations → counterfactuals.csv                   │
+  │  3. Feature Importance → feature_importance.csv + bar_chart.png         │
+  │  4. Trajectory Reports → trajectory_reports/episode_XX.csv              │
+  └────────────────────────┬────────────────────────────────────────────────┘
+                           │
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  xai_visualizations.py (NEW)                                            │
+  │  ─────────────────────                                                  │
+  │  1. Risk × Action distribution → policy_risk_action.png                 │
+  │  2. Overdue × Income heatmap → policy_heatmap.png                       │
+  │  3. GAT embedding t-SNE → embedding_tsne.png                            │
+  │  4. Stress → Action shift → policy_stress_shift.png                     │
+  └────────────────────────┬────────────────────────────────────────────────┘
+                           │
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  fairness_audit.py (NEW)                                                │
+  │  ────────────────                                                       │
+  │  1. Demographic parity test → fairness_audit.csv                        │
+  │  2. Statistical tests → fairness_report.txt                             │
+  │  3. Bias visualization → fairness_occupation.png                        │
+  └────────────────────────┬────────────────────────────────────────────────┘
+                           │
+                           ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  xai_inference.py (NEW)                                                 │
+  │  ──────────────                                                         │
+  │  Real-time explainable inference:                                       │
+  │    Input: borrower features                                             │
+  │    Output: Action recommendation + full explanation                     │
+  │      - SHAP feature contributions                                       │
+  │      - Confidence score                                                 │
+  │      - Top influential neighbors                                        │
+  │      - Counterfactual scenario                                          │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  TOTAL NEW FILES:
+    - xai_analysis.py (SHAP, counterfactuals, feature importance, trajectories)
+    - xai_visualizations.py (policy plots, embedding visualization)
+    - fairness_audit.py (bias analysis)
+    - xai_inference.py (real-time explainable demo)
+
+  TOTAL MODIFIED FILES:
+    - graph_builder.py (add attention weight extraction)
+    - debt_env.py (add confidence extraction method)
+
+  TOTAL NEW OUTPUT FILES (generated at runtime):
+    - gat_attention_weights.csv
+    - shap_summary_plot.png
+    - shap_per_decision.json
+    - counterfactuals.csv
+    - feature_importance.csv + feature_importance.png
+    - policy_risk_action.png
+    - policy_heatmap.png
+    - embedding_tsne.png
+    - policy_stress_shift.png
+    - fairness_audit.csv
+    - fairness_report.txt
+    - trajectory_reports/*.csv
+
+================================================================================
+END OF REPORT
+================================================================================
