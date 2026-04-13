@@ -1,34 +1,132 @@
-# Environment variables (contains DB credentials)
+# ============================================
+# Environment & Secrets
+# ============================================
 .env
+.env.backup
+.env.bak
+*.local
 
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 venv/
+ENV/
+env/
 *.egg-info/
+*.egg
 dist/
 build/
+*.manifest
+*.spec
 
-# IDE
+# ============================================
+# IDE & Editors
+# ============================================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
 
-# Jupyter
+# ============================================
+# Jupyter Notebooks
+# ============================================
 .ipynb_checkpoints/
 
-# ML artifacts
+# ============================================
+# ML Model Artifacts
+# ============================================
 *.pkl
 *.zip
 *.model
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+*.ckpt
 
-# Logs
+# ============================================
+# Generated Data & Outputs
+# ============================================
 logs/
-
-# XAI outputs
 xai_outputs/
 evaluation_outputs/
-
-# Test data
 test_data.csv
+
+# Generated CSVs (regenerable from pipeline)
+rl_ready_with_graph_features.csv
+gat_attention_weights.csv
+graph_validation_report.csv
+
+# ============================================
+# Testing & Linting Caches
+# ============================================
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.tox/
+
+# ============================================
+# OS Files
+# ============================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# ============================================
+# Research Papers (large PDFs)
+# ============================================
+related_research_papers/
+docs/
+# ============================================
+# Documentation Build
+# ============================================
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.tex
+*.toc
+*.lof
+*.lot
+*.out
+*.pdf
+!final_report.pdf
+
+# ============================================
+# Database Files
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================
+# Temporary Files
+# ============================================
+*.tmp
+*.temp
+*.log
+*.cache

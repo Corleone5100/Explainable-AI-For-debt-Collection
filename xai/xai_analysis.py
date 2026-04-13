@@ -496,7 +496,10 @@ def compute_feature_importance(model, env, base_env, n_episodes=30):
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, _ = env.step(action)
+            done_val = done[0] if hasattr(done, '__iter__') else done
             total_reward += float(reward[0]) if hasattr(reward, '__iter__') else float(reward)
+            if done_val:
+                break
         baseline_rewards.append(total_reward)
     baseline_mean = np.mean(baseline_rewards)
     print(f"  Baseline mean reward (over {n_episodes} episodes): {baseline_mean:.2f}")
@@ -521,7 +524,10 @@ def compute_feature_importance(model, env, base_env, n_episodes=30):
             while not done:
                 action, _ = model.predict(obs, deterministic=True)
                 obs, reward, done, _ = env.step(action)
+                done_val = done[0] if hasattr(done, '__iter__') else done
                 total_reward += float(reward[0]) if hasattr(reward, '__iter__') else float(reward)
+                if done_val:
+                    break
             shuffled_rewards.append(total_reward)
 
         shuffled_mean = np.mean(shuffled_rewards)
@@ -617,8 +623,9 @@ def analyze_trajectories(model, env, base_env, n_episodes=N_TRAJECTORIES):
 
         step_num = 0
         while True:
-            # Get action and confidence
-            conf_info = base_env.get_action_probs(model, obs, deterministic=True)
+            # Get action and confidence — obs from VecEnv is (1, obs_dim), squeeze for base_env
+            obs_squeezed = obs[0] if hasattr(obs, '__iter__') and np.asarray(obs).ndim > 1 else obs
+            conf_info = base_env.get_action_probs(model, obs_squeezed, deterministic=True)
             action = conf_info['action']
             action_name = ACTION_NAMES[action]
             action_counts[action_name] = action_counts.get(action_name, 0) + 1
@@ -642,7 +649,7 @@ def analyze_trajectories(model, env, base_env, n_episodes=N_TRAJECTORIES):
             top_shap_features = [
                 {
                     'feature': feature_cols[fi],
-                    'value': float(obs[fi]) if fi < len(obs) else 0.0,
+                    'value': float(obs[0][fi]) if hasattr(obs, '__iter__') and np.asarray(obs).ndim > 1 else float(obs[fi]) if fi < len(obs) else 0.0,
                     'contribution': float(action_shap[fi]) if fi < len(action_shap) else 0.0,
                 }
                 for fi in top_shap_idx
@@ -650,7 +657,8 @@ def analyze_trajectories(model, env, base_env, n_episodes=N_TRAJECTORIES):
 
             # Step environment
             next_obs, reward, done, info = env.step(np.array([action]))
-            truncated = info.get('truncated', False) if isinstance(info, dict) else False
+            # VecEnv info is a list of dicts (one per env)
+            truncated = info[0].get('truncated', False) if isinstance(info, list) and len(info) > 0 else False
             total_reward += float(reward[0]) if hasattr(reward, '__iter__') else float(reward)
 
             steps.append({

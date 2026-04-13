@@ -541,7 +541,7 @@ def main():
 
     # -- 9. Train GNN --
     num_classes = len(label_encoder.classes_)
-    model, gat_embeddings, gat_attention = train_gnn(graph_data, num_classes, epochs=100, lr=0.005)
+    model, gat_embeddings, gat_attention = train_gnn(graph_data, num_classes, epochs=cfg.gnn_epochs, lr=cfg.gnn_lr)
 
     # -- 10. Save GAT Attention Weights --
     if gat_attention is not None:

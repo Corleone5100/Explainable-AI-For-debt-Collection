@@ -134,6 +134,44 @@ class Config:
     def eval_ablation_features(self):
         return os.getenv('EVAL_ABLATION_FEATURES', 'graph,structural,community,multihop').split(',')
 
+    # -- Feature Set Selection --
+    @property
+    def feature_set(self):
+        """
+        Feature set to use for training.
+
+        Options:
+          - 'optimal':  +all_graph (16 features: core + community + 1-hop + GAT embeddings)
+                        Recommended for production. Fast training, best performance.
+          - 'full':     All 150 features including multi-dimensional GAT embeddings.
+                        Requires 500K+ timesteps (5M recommended).
+          - 'ablation': Run all feature subsets for analysis (evaluation only).
+
+        Per the ablation study:
+          - Community features are the single most important addition (+Rs. 0.99M alone)
+          - Structural features (degree, pagerank, betweenness) HURT performance
+          - Multi-hop signals (2-hop, 3-hop) add noise; 1-hop is sufficient
+          - Full 150-feature model fails catastrophically with only 50K timesteps
+        """
+        return os.getenv('FEATURE_SET', 'optimal')
+
+    @property
+    def curriculum_learning(self):
+        """
+        Enable curriculum learning for the RL agent.
+
+        When True, training starts with only High/Very High risk borrowers
+        (where the agent performs well) and gradually introduces Medium,
+        Low, and Very Low risk borrowers. This helps the agent learn
+        good policies for the most profitable cases first, then generalize.
+
+        Phases (each phase = fraction of total timesteps):
+          Phase 1 (0-25%):   High + Very High only
+          Phase 2 (25-50%):  High + Very High + Medium
+          Phase 3 (50-100%): All risk categories
+        """
+        return os.getenv('CURRICULUM_LEARNING', 'true').lower() == 'true'
+
     # -- Visualization --
     @property
     def viz_sample_size(self):

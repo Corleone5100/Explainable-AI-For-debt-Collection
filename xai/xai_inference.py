@@ -48,8 +48,18 @@ def _manual_norm(env, obs):
     var = obs_rms.var
     if hasattr(mean, 'cpu'): mean = mean.cpu().numpy()
     if hasattr(var, 'cpu'): var = var.cpu().numpy()
-    if hasattr(obs, 'cpu'): obs = obs.cpu().numpy()
-    return np.clip((obs - mean) / np.sqrt(var + env.epsilon), -env.clip_obs, env.clip_obs).astype(np.float32)
+    # Work in numpy to avoid tensor device issues
+    if hasattr(obs, 'cpu'):
+        was_tensor = True
+        dev = obs.device
+        obs_np = obs.cpu().detach().numpy()
+    else:
+        was_tensor = False
+        obs_np = obs
+    result = np.clip((obs_np - mean) / np.sqrt(var + env.epsilon), -env.clip_obs, env.clip_obs).astype(np.float32)
+    if was_tensor:
+        return torch.tensor(result, device=dev)
+    return result
 
 
 def load_model_and_data():
@@ -74,8 +84,8 @@ def load_attention_weights():
 
 
 def build_shap_explainer(model, env, base_env, n_background=50):
-    """Build a SHAP KernelExplainer for the policy."""
-    print("  Building SHAP explainer...")
+    """Build 4 single-output SHAP KernelExplainers (one per action)."""
+    print("  Building SHAP explainers (one per action)...")
     df = base_env.df
     feature_cols = base_env.feature_cols
 
@@ -83,14 +93,31 @@ def build_shap_explainer(model, env, base_env, n_background=50):
     background_obs = df.iloc[bg_indices][feature_cols].values.astype(np.float32)
 
     def policy_fn(obs_batch):
-        obs_tensor = torch.tensor(obs_batch, dtype=torch.float32).to(model.device)
+        # SHAP passes numpy arrays — convert to torch tensor
+        if isinstance(obs_batch, np.ndarray):
+            obs_tensor = torch.tensor(obs_batch, dtype=torch.float32)
+        else:
+            obs_tensor = obs_batch
+        # Handle single observation vs batch
+        if obs_tensor.dim() == 1:
+            obs_tensor = obs_tensor.unsqueeze(0)
+        obs_tensor = obs_tensor.to(model.device)
         obs_norm = _manual_norm(env, obs_tensor)
         dist = model.policy.get_distribution(obs_norm)
         return dist.distribution.probs.cpu().detach().numpy()
 
-    explainer = shap.KernelExplainer(policy_fn, background_obs)
-    print("  SHAP explainer ready.")
-    return explainer, feature_cols
+    # Build one explainer per action (single-output = compatible with all SHAP versions)
+    explainers = []
+    for action_idx in range(len(ACTION_NAMES)):
+        def single_policy(obs_batch, _action=action_idx):
+            probs = policy_fn(obs_batch)
+            return probs[:, _action]  # Return probability of one action only
+
+        explainer = shap.KernelExplainer(single_policy, background_obs)
+        explainers.append(explainer)
+        print(f"    Action {action_idx} ({ACTION_NAMES[action_idx]}) explainer ready.")
+
+    return explainers, feature_cols
 
 
 def get_top_neighbors(borrower_idx, attn_df, df, k=5):
@@ -207,14 +234,32 @@ def explain_borrower(borrower_idx, model, env, base_env, shap_explainer,
     action = conf['action']
     action_name = ACTION_NAMES[action]
 
-    # -- 2. SHAP explanation --
-    shap_vals = shap_explainer.shap_values(obs.reshape(1, -1), nsamples=50, l1_reg='auto')
-    action_shap = shap_vals[action][0] if isinstance(shap_vals, list) else shap_vals[0]
+    # -- 2. SHAP explanation (use the explainer for the chosen action) --
+    n_feat = len(feature_cols)
+    action_explainer = shap_explainer[action]
+    shap_vals = action_explainer.shap_values(obs.reshape(1, -1), nsamples=max(200, n_feat * 6), l1_reg=False)
+
+    # Single-output explainer: shap_vals is array of shape (1, n_features) or (n_features,)
+    if hasattr(shap_vals, 'values'):
+        action_shap = shap_vals.values[0]  # Explanation object
+    elif isinstance(shap_vals, np.ndarray):
+        if shap_vals.ndim == 2:
+            action_shap = shap_vals[0]
+        else:
+            action_shap = shap_vals
+    else:
+        action_shap = np.array(shap_vals).flatten()
+
+    action_shap = action_shap.flatten()
+    assert len(action_shap) == len(feature_cols), (
+        f"SHAP returned {len(action_shap)} values but expected {len(feature_cols)} features"
+    )
 
     # Sort features by |SHAP| contribution
-    sorted_features = np.argsort(np.abs(action_shap))[::-1]
+    sorted_indices = np.argsort(np.abs(action_shap))[::-1]
     top_features = []
-    for fi in sorted_features[:5]:
+    for fi in sorted_indices[:5]:
+        fi = int(fi)
         top_features.append({
             'feature': feature_cols[fi],
             'value': round(float(obs[fi]), 3),
@@ -230,7 +275,7 @@ def explain_borrower(borrower_idx, model, env, base_env, shap_explainer,
     sorted_actions = np.argsort(conf['probs'])[::-1]
     counterfactual = None
     if len(sorted_actions) >= 2:
-        target_action = sorted_actions[1]
+        target_action = int(sorted_actions[1])
         counterfactual = generate_counterfactual_fast(
             model, env, obs, feature_cols, target_action, obs
         )

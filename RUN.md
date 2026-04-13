@@ -20,11 +20,13 @@ Explainable AI For debt Collection/
 │   ├── socioeconomic_analysis.py   # Occupation, income, region distributions
 │   └── visualize_graph.py          # 6-panel graph visualization
 │
-├── scripts/                     # Step 5-8: Core ML pipeline
+├── scripts/                     # Step 5-9: Core ML pipeline
 │   ├── graph_builder.py            # Build contagion graph + train GAT + extract embeddings
-│   ├── debt_env.py                 # RL environment with graph-enhanced features
-│   ├── testing.py                  # Run trained model on sample borrowers
-│   ├── evaluation.py               # Train/test split, metrics, ablation, confusion matrix
+│   ├── debt_env.py                 # RL environment with graph-enhanced features + curriculum learning
+│   ├── testing.py                  # Run trained model on sample borrowers (saves JSON)
+│   ├── evaluation.py               # Train/test split, metrics, ablation, confusion, baselines, hybrid
+│   ├── hybrid_policy.py            # Hybrid Rule-Based + PPO policy evaluation
+│   ├── feature_selector.py         # Feature set filtering utility (optimal/full/baseline)
 │   └── learning_curves.py          # Multi-seed training with confidence bands
 │
 ├── xai/                         # Step 9-12: Explainable AI analysis
@@ -63,7 +65,7 @@ pip install shap tqdm
 pip install python-louvain python-dotenv
 pip install pytest
 
-# Optional: for large graph operations
+# Required: for graph operations (torch-scatter and torch-sparse)
 pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-<version>.html
 ```
 
@@ -223,6 +225,25 @@ python scripts/evaluation.py
 - `baseline_comparison.csv` — Random vs rule-based vs PPO
 
 **Time:** ~15-30 minutes (ablation trains takes longest)
+
+---
+
+### Step 8b: Hybrid Policy Evaluation (Optional)
+
+```bash
+python scripts/hybrid_policy.py --evaluate --episodes 50
+```
+
+**What it does:**
+- Combines rule-based decisions for Very Low/Low risk with PPO for Medium/High/Very High
+- Evaluates the hybrid policy over 50 episodes
+- Compares against standalone PPO and rule-based baselines
+
+**Outputs in `evaluation_outputs/`:**
+- `hybrid_evaluation_results.json` — Full hybrid metrics
+- `hybrid_evaluation_steps.csv` — Per-step details
+
+**Time:** ~5-10 minutes
 
 ---
 
@@ -395,8 +416,13 @@ All tunable parameters are in `.env`. Key settings:
 | `GNN_LR` | 0.005 | GAT learning rate |
 | `GNN_HIDDEN` | 32 | GAT hidden layer size |
 | `GNN_HEADS` | 4 | Number of attention heads |
+| `GNN_DROPOUT` | 0.3 | GAT dropout rate |
 | `RL_LEARNING_RATE` | 0.0003 | PPO learning rate |
-| `RL_TOTAL_TIMESTEPS` | 500000 | Total PPO training steps |
+| `RL_N_STEPS` | 2048 | PPO rollout steps per iteration |
+| `RL_TOTAL_TIMESTEPS` | 500000 | Total PPO training steps (auto-scaled for full feature set) |
+| `RL_DEVICE` | cuda | Training device (cuda/cpu) |
+| `FEATURE_SET` | optimal | Feature set: optimal (29 features), full (150 features), ablation |
+| `CURRICULUM_LEARNING` | true | Enable 3-phase progressive training (High/Very High → +Medium → All) |
 | `EVAL_TRAIN_RATIO` | 0.8 | Train/test split ratio |
 | `EVAL_N_EPISODES` | 50 | Episodes for evaluation |
 | `EVAL_N_SEEDS` | 3 | Seeds for learning curves |

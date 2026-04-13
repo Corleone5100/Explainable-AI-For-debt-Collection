@@ -28,6 +28,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from scripts.debt_env import DebtCollectionEnv, ACTION_NAMES
+from scripts.hybrid_policy import HybridPolicy, evaluate_hybrid_policy
 from config import cfg, logger
 
 warnings.filterwarnings('ignore')
@@ -125,11 +126,20 @@ def evaluate_agent_comprehensive(model, env, base_env, n_episodes=None):
         while True:
             action, _ = model.predict(obs, deterministic=True)
             action = int(np.asarray(action).item()) if np.asarray(action).ndim == 0 else int(action[0])
+
+            # Apply risk-aware action masking
+            borrower_row = df.iloc[base_env.current_row]
+            if hasattr(base_env, 'apply_action_mask'):
+                obs_raw = base_env._get_obs()
+                conf_data = base_env.get_action_probs(model, obs_raw, deterministic=True)
+                probs = np.array(conf_data['probs'])
+                masked_probs, mask = base_env.apply_action_mask(probs, borrower_row)
+                action = int(np.argmax(masked_probs))
+
             action_name = ACTION_NAMES[action]
             action_counts[action_name] += 1
 
             # Get borrower info
-            borrower_row = df.iloc[base_env.current_row]
             risk = borrower_row.get('risk_category', 'Unknown')
             total_demand = borrower_row.get('total_demand', 0)
 
@@ -322,7 +332,8 @@ def run_ablation_study(df_path, n_episodes=20):
                 row = self.df.iloc[self.current_row]
                 return np.array([row.get(c, 0.0) for c in self.feature_cols], dtype=np.float32)
 
-        ablation_timesteps = min(50000, cfg.rl_total_timesteps)
+        # Use 100K timesteps for ablation (enough for relative rankings, 5x faster than full 500K)
+        ablation_timesteps = min(100000, cfg.rl_total_timesteps)
         try:
             base_env = SubsetEnv(df_path)
             env = DummyVecEnv([lambda: base_env])
@@ -501,6 +512,7 @@ def run_baselines(df_path, n_episodes=20):
     Compare PPO agent against:
       1. Random policy
       2. Rule-based heuristic (based on risk category)
+      3. Hybrid policy (Rule-based for Very Low/Low, PPO for Medium/High/Very High)
 
     Returns: comparison dict
     """
@@ -684,8 +696,32 @@ def main():
     # -- Step 4: Baselines --
     baseline_results = run_baselines(DATA_PATH, n_episodes=20)
 
-    # -- Step 5: Ablation Study --
-    ablation_results = run_ablation_study(DATA_PATH, n_episodes=10)
+    # -- Step 5: Hybrid Policy Evaluation --
+    logger.info("\n" + "=" * 60)
+    logger.info("HYBRID POLICY EVALUATION (Rule-Based + PPO)")
+    logger.info("=" * 60)
+    try:
+        hybrid_results = evaluate_hybrid_policy(
+            model_path="graph_rl_debt_model.zip",
+            data_path=DATA_PATH,
+            vec_normalize_path="vec_normalize.pkl",
+            n_episodes=cfg.eval_n_episodes,
+        )
+        # Save hybrid results
+        hybrid_output = {k: v for k, v in hybrid_results.items() if k != 'per_step_details'}
+        with open(os.path.join(OUTPUT_DIR, "hybrid_evaluation_results.json"), 'w') as f:
+            json.dump(hybrid_output, f, indent=2, default=str)
+        pd.DataFrame(hybrid_results['per_step_details']).to_csv(
+            os.path.join(OUTPUT_DIR, "hybrid_evaluation_steps.csv"), index=False
+        )
+        logger.info(f"  Hybrid policy: Net reward=Rs. {hybrid_results['net_reward']:,.2f}, "
+                     f"Avg=Rs. {hybrid_results['avg_reward_per_decision']:,.2f}/decision")
+    except Exception as e:
+        logger.error(f"  Hybrid policy evaluation failed: {e}")
+        hybrid_results = None
+
+    # -- Step 6: Ablation Study --
+    ablation_results = run_ablation_study(DATA_PATH, n_episodes=20)
 
     # -- Summary --
     elapsed = time.time() - start_time
@@ -705,6 +741,9 @@ def main():
     logger.info(f"  +━ ablation_study.csv")
     logger.info(f"  +━ ablation_study.png")
     logger.info(f"  +━ baseline_comparison.csv")
+    if hybrid_results is not None:
+        logger.info(f"  +━ hybrid_evaluation_results.json")
+        logger.info(f"  +━ hybrid_evaluation_steps.csv")
 
     # Save baseline comparison
     baseline_df = pd.DataFrame([baseline_results['random'], baseline_results['rule_based']])
@@ -715,6 +754,7 @@ def main():
         'evaluation': {k: v for k, v in eval_results.items() if k != 'per_step_details'},
         'confusion_matrix': cm_results,
         'baselines': baseline_results,
+        'hybrid_policy': hybrid_output if hybrid_results is not None else None,
         'ablation': ablation_results.to_dict('records') if ablation_results is not None else [],
     }
     with open(os.path.join(OUTPUT_DIR, "full_evaluation_summary.json"), 'w') as f:
